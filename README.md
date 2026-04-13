@@ -2,7 +2,7 @@
 
 > Turn successful AI agent runs into reusable markdown skills.
 
-<!-- ![Demo](assets/demo.gif) -->
+![Demo](assets/demo.gif)
 
 [![npm version](https://img.shields.io/npm/v/skillcam.svg)](https://www.npmjs.com/package/skillcam)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
