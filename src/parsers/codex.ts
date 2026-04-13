@@ -118,9 +118,10 @@ export function parseCodexSession(jsonl: string): ParsedSession {
     if (msg.role === "assistant") {
       const msgTime = new Date(msg.timestamp).getTime();
       while (toolIdx < toolCallList.length) {
-        const tcTime = new Date(toolCallList[toolIdx].timestamp).getTime();
+        const tc = toolCallList[toolIdx]!;
+        const tcTime = new Date(tc.timestamp).getTime();
         if (tcTime >= msgTime) {
-          msg.toolCalls.push(toolCallList[toolIdx]);
+          msg.toolCalls.push(tc);
           toolIdx++;
         } else {
           break;
