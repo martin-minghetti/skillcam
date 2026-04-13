@@ -1,58 +1,93 @@
-# SkillCam
+<p align="center">
+  <img src="assets/demo.gif" alt="SkillCam demo" width="700">
+</p>
 
-> Turn successful AI agent runs into reusable markdown skills.
+<h1 align="center">SkillCam</h1>
 
-![Demo](assets/demo.gif)
+<p align="center">
+  Turn successful AI agent runs into reusable markdown skills.<br>
+  Stop solving the same problem twice.
+</p>
 
-[![npm version](https://img.shields.io/npm/v/skillcam.svg)](https://www.npmjs.com/package/skillcam)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://www.npmjs.com/package/skillcam"><img src="https://img.shields.io/npm/v/skillcam.svg" alt="npm version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://www.npmjs.com/package/skillcam"><img src="https://img.shields.io/npm/dm/skillcam.svg" alt="npm downloads"></a>
+</p>
 
-## Quick Start
+---
+
+## The Problem
+
+Your AI coding agents solve problems every day. They read files, run tools, iterate on solutions, and eventually get it right. Then they forget everything.
+
+Next time the same problem shows up, the agent starts from scratch. Same research, same trial and error, same token burn. You're paying for the same work twice.
+
+## The Solution
+
+SkillCam reads native session logs from Claude Code and Codex CLI, extracts the successful pattern, and writes it as a clean `SKILL.md` file. Next time the agent sees the same kind of task, it reads the skill and follows the steps instead of figuring it out again.
+
+One command. No config. Works with any LLM or without one.
 
 ```bash
 npx skillcam distill --latest
 ```
 
-That's it. One command turns your last agent session into a reusable skill.
+## Before and After
 
-## What It Does
+```
+Before SkillCam:
 
-- **Reads** native session logs from Claude Code and Codex CLI
-- **Distills** the successful pattern into a clean SKILL.md file
-- **Works** with any LLM (Claude, GPT, or template-only mode)
+  You: "Fix the auth tests"
+  Agent: *figures it out from scratch* (15 min, 50k tokens)
+
+  Next week:
+  You: "Fix the auth tests again"
+  Agent: *figures it out from scratch again* (15 min, 50k tokens)
+```
+
+```
+After SkillCam:
+
+  You: "Fix the auth tests"
+  Agent: *figures it out* (15 min, 50k tokens)
+
+  $ skillcam distill --latest
+  > Wrote skill to ./skills/fix-auth-tests.md
+
+  Next week:
+  You: "Fix the auth tests again"
+  Agent: *reads the skill, follows the steps* (3 min, 8k tokens)
+```
 
 ## How It Works
 
 ```
-Agent session (JSONL) → SkillCam → SKILL.md
+                 +-----------------+
+Session JSONL -->|    Discovery    |--> finds sessions from ~/.claude/ and ~/.codex/
+                 +-----------------+
+                         |
+                         v
+                 +-----------------+
+                 |     Parser      |--> extracts messages, tool calls, files, tokens
+                 +-----------------+
+                         |
+                         v
+                 +-----------------+
+                 |    Distiller    |--> LLM or template mode
+                 +-----------------+
+                         |
+                         v
+                    SKILL.md file
 ```
 
-Your AI coding agents solve problems every day. When they do something well, SkillCam captures the pattern so they can do it again. No more starting from zero.
+**Discovery** scans `~/.claude/projects/` and `~/.codex/sessions/` for JSONL session logs, sorted by recency.
 
-### Before SkillCam
+**Parsers** extract the structured data: user messages, assistant responses, tool calls, files modified, token counts, and project metadata. Each agent format has its own parser.
 
-```
-You: "Fix the auth tests"
-Agent: *figures it out from scratch* (15 min, 50k tokens)
+**Distiller** takes the parsed session and produces a skill file. In LLM mode (default), it sends the session to Claude or GPT with a distillation prompt. In template mode (`--no-llm`), it extracts a structured skill without any API call.
 
-Next week:
-You: "Fix the auth tests again"
-Agent: *figures it out from scratch again* (15 min, 50k tokens)
-```
-
-### After SkillCam
-
-```
-You: "Fix the auth tests"
-Agent: *figures it out* (15 min, 50k tokens)
-
-$ skillcam distill --latest
-✓ Wrote skill to ./skills/fix-auth-tests.md
-
-Next week:
-You: "Fix the auth tests again"
-Agent: *reads the skill, follows the steps* (3 min, 8k tokens)
-```
+Every distillation emits a structured event to `agents/_core/events.jsonl` for observability.
 
 ## Installation
 
@@ -100,9 +135,27 @@ skillcam distill --latest --provider openai --model gpt-4o  # Use GPT-4o
 skillcam distill --latest --output ./my-skills/        # Custom output directory
 ```
 
+## Supported Agents
+
+| Agent | Status | Session Location |
+|-------|--------|------------------|
+| Claude Code | Supported | `~/.claude/projects/<project>/<session>.jsonl` |
+| Codex CLI | Supported | `~/.codex/sessions/YYYY/MM/DD/<session>.jsonl` |
+| Gemini CLI | Planned | -- |
+
+## LLM Providers
+
+| Mode | Command | API Key Required |
+|------|---------|-----------------|
+| Template | `--no-llm` | No |
+| Anthropic | `--provider anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `--provider openai` | `OPENAI_API_KEY` |
+
+Template mode works for structured extraction. LLM mode produces more natural, actionable skills. If the LLM call fails, SkillCam falls back to template mode automatically.
+
 ## Output Format
 
-SkillCam generates standard SKILL.md files:
+Skills are standard markdown with YAML frontmatter:
 
 ```markdown
 ---
@@ -136,33 +189,54 @@ Agent: Reads test, finds mock mismatch, fixes setup, all tests pass.
 - Check both unit and integration test suites
 ```
 
-## Supported Agents
-
-| Agent | Status | Session Location |
-|-------|--------|------------------|
-| Claude Code | Supported | `~/.claude/projects/<project>/<session>.jsonl` |
-| Codex CLI | Supported | `~/.codex/sessions/YYYY/MM/DD/<session>.jsonl` |
-| Gemini CLI | Planned | — |
-
-## LLM Providers
-
-SkillCam can use an LLM to generate higher-quality skills, or run in template-only mode:
-
-| Mode | Command | API Key Required |
-|------|---------|-----------------|
-| Template | `--no-llm` | No |
-| Anthropic | `--provider anthropic` | `ANTHROPIC_API_KEY` |
-| OpenAI | `--provider openai` | `OPENAI_API_KEY` |
-
-Template mode works great for structured extraction. LLM mode produces more natural, actionable skills.
-
-## Examples
-
 See [`examples/skills/`](examples/skills/) for real skills generated from actual sessions.
+
+## Project Structure
+
+```
+skillcam/
+├── src/
+│   ├── cli.ts              # CLI entry point (commander)
+│   ├── discovery.ts        # Session finder for Claude Code + Codex
+│   ├── distiller.ts        # LLM and template distillation
+│   ├── distiller-prompt.ts # Prompt for LLM distillation
+│   ├── parsers/
+│   │   ├── claude-code.ts  # Claude Code JSONL parser
+│   │   ├── codex.ts        # Codex CLI JSONL parser
+│   │   └── types.ts        # Shared parser types
+│   └── events/
+│       ├── emit.ts         # Event emitter (JSONL append)
+│       └── types.ts        # Event schema types
+├── examples/skills/        # Example generated skills
+└── tests/                  # Vitest test suite
+```
 
 ## Contributing
 
 PRs welcome. Please open an issue first to discuss what you'd like to change.
+
+Some areas where contributions would be useful:
+
+- **New agent parsers** -- Gemini CLI, Cursor, Windsurf, or other agents that produce session logs
+- **Better distillation prompts** -- improving the quality of LLM-generated skills
+- **Skill validation** -- linting or scoring generated skills for completeness
+- **CI integration** -- auto-distilling skills from successful CI runs
+
+### Development
+
+```bash
+git clone https://github.com/martin-minghetti/skillcam.git
+cd skillcam
+npm install
+npm run dev -- list          # Run from source
+npm test                     # Run tests
+npm run build                # Compile TypeScript
+```
+
+## Community
+
+- [GitHub Issues](https://github.com/martin-minghetti/skillcam/issues) -- bugs, feature requests, questions
+- [GitHub Discussions](https://github.com/martin-minghetti/skillcam/discussions) -- ideas, show & tell, general talk
 
 ## License
 
