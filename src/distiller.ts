@@ -8,11 +8,13 @@ interface DistillOptions {
 }
 
 function templateDistill(session: ParsedSession): string {
-  const name = session.project
+  const projectName = session.project
     .split("/")
     .pop()
     ?.toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-") ?? "unnamed-skill";
+    .replace(/[^a-z0-9]+/g, "-") ?? "unnamed";
+  const shortId = session.sessionId.slice(0, 8);
+  const name = `${projectName}-${shortId}`;
 
   const tools = session.summary.uniqueTools.join(", ");
   const files = session.filesModified.join(", ") || "none tracked";
