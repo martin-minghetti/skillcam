@@ -63,31 +63,45 @@ After SkillCam:
 ## How It Works
 
 ```
-                 +-----------------+
-Session JSONL -->|    Discovery    |--> finds sessions from ~/.claude/ and ~/.codex/
-                 +-----------------+
-                         |
-                         v
-                 +-----------------+
-                 |     Parser      |--> extracts messages, tool calls, files, tokens
-                 +-----------------+
-                         |
-                         v
-                 +-----------------+
-                 |    Distiller    |--> LLM or template mode
-                 +-----------------+
-                         |
-                         v
-                    SKILL.md file
+  ~/.claude/projects/**/*.jsonl
+  ~/.codex/sessions/**/*.jsonl
+           │
+           ▼
+   ┌──────────────┐
+   │  1. Discover  │  Scan session dirs, sort by recency
+   └──────┬───────┘
+          │  session JSONL
+          ▼
+   ┌──────────────┐
+   │   2. Parse    │  Extract messages, tool calls, files, tokens
+   └──────┬───────┘
+          │  ParsedSession
+          ▼
+   ┌──────────────┐    ┌─────────────────────────────┐
+   │  3. Distill   │───▶│  LLM mode (default)         │
+   └──────┬───────┘    │  Sends conversation + tool   │
+          │            │  calls to Claude / GPT with   │
+          │            │  a distillation prompt         │
+          │            ├─────────────────────────────┤
+          │            │  Template mode (--no-llm)    │
+          │            │  Structured extraction, no   │
+          │            │  API key needed               │
+          │            └─────────────────────────────┘
+          ▼
+   ┌──────────────┐
+   │  4. Emit      │  Log event to events.jsonl
+   └──────┬───────┘
+          │
+          ▼
+      SKILL.md
 ```
 
-**Discovery** scans `~/.claude/projects/` and `~/.codex/sessions/` for JSONL session logs, sorted by recency.
-
-**Parsers** extract the structured data: user messages, assistant responses, tool calls, files modified, token counts, and project metadata. Each agent format has its own parser.
-
-**Distiller** takes the parsed session and produces a skill file. In LLM mode (default), it sends the session to Claude or GPT with a distillation prompt. In template mode (`--no-llm`), it extracts a structured skill without any API call.
-
-Every distillation emits a structured event to `agents/_core/events.jsonl` for observability.
+| Stage | What it does | Key details |
+|-------|-------------|-------------|
+| **Discover** | Finds session logs on disk | Scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files, sorted by most recent first |
+| **Parse** | Reads the raw JSONL into a structured format | Extracts user/assistant messages, tool calls with inputs/outputs, files modified, token usage, and project metadata. Each agent format has its own parser |
+| **Distill** | Converts the parsed session into a reusable skill | **LLM mode** (default): sends the conversation and tool call summary to Claude or GPT with a distillation prompt. **Template mode** (`--no-llm`): extracts steps directly from tool calls without any API call. Falls back to template mode automatically if the LLM call fails |
+| **Emit** | Records the distillation for observability | Appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, and distill mode |
 
 ## Installation
 
