@@ -1,0 +1,25 @@
+{
+  "name": "skillcam",
+  "version": "0.1.0",
+  "description": "Turn successful AI agent runs into reusable markdown skills",
+  "type": "module",
+  "bin": {
+    "skillcam": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run"
+  },
+  "keywords": ["ai", "agents", "skills", "claude-code", "codex", "cli"],
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "^25.6.0",
+    "commander": "^14.0.3",
+    "typescript": "^6.0.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.4"
+  }
+}
