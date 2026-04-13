@@ -6,6 +6,7 @@ import { discoverSessions } from "./discovery.js";
 import { parseClaudeCodeSession } from "./parsers/claude-code.js";
 import { parseCodexSession } from "./parsers/codex.js";
 import { distillSkill } from "./distiller.js";
+import { emitEvent } from "./events/emit.js";
 import type { ParsedSession } from "./parsers/types.js";
 
 function parseSessionFile(
@@ -141,6 +142,21 @@ program
     mkdirSync(opts.output, { recursive: true });
     const outPath = join(opts.output, fileName);
     writeFileSync(outPath, skill);
+
+    emitEvent({
+      run_id: `run_${target.sessionId.slice(0, 8)}`,
+      type: "skill.created",
+      agent_name: "skillcam",
+      attrs: {
+        source_session: target.sessionId,
+        source_agent: target.agent,
+        skill_name: skillName,
+        skill_path: outPath,
+        token_cost_input: parsed.totalTokens.input,
+        token_cost_output: parsed.totalTokens.output,
+        distill_mode: useLlm ? "llm" : "template",
+      },
+    });
 
     console.log(`✓ Wrote skill to ${outPath}`);
     console.log(`\nYour agent can now reuse this skill in future sessions.`);
