@@ -4,6 +4,9 @@ import { scanAndRedact, summarize, type SecretMatch } from "./secret-scan.js";
 
 export type SecretPolicy = "abort" | "redact" | "allow";
 
+// 60 second timeout for LLM calls (M3)
+const LLM_TIMEOUT_MS = 60_000;
+
 interface DistillOptions {
   useLlm?: boolean;
   provider?: "anthropic" | "openai";
@@ -21,7 +24,41 @@ export class SecretsDetectedError extends Error {
   }
 }
 
-function templateDistill(session: ParsedSession): string {
+/**
+ * Scan a field for secrets according to policy. Returns the value to use
+ * (either original or redacted) or throws if policy is "abort" and matches found.
+ *
+ * C4 fix: template mode used to write session metadata (project, first user
+ * message, filesModified) directly to SKILL.md without scanning. An agent that
+ * put `ANTHROPIC_API_KEY=sk-ant-...` in a message or in a file path would have
+ * it persisted in the skill file, where the user might commit it.
+ */
+function applyScanPolicy(
+  value: string,
+  location: string,
+  policy: SecretPolicy,
+  collected: SecretMatch[]
+): string {
+  if (!value) return value;
+  const { matches, redacted } = scanAndRedact(value, location);
+  if (matches.length === 0) return value;
+
+  collected.push(...matches);
+  if (policy === "abort") {
+    throw new SecretsDetectedError(matches);
+  }
+  if (policy === "redact") {
+    return redacted;
+  }
+  // "allow" — return as-is
+  return value;
+}
+
+function templateDistill(
+  session: ParsedSession,
+  secretPolicy: SecretPolicy = "abort",
+  onSecretsDetected?: (matches: SecretMatch[]) => void
+): string {
   const projectName = session.project
     .split("/")
     .pop()
@@ -31,9 +68,12 @@ function templateDistill(session: ParsedSession): string {
   const name = `${projectName}-${shortId}`;
 
   const tools = session.summary.uniqueTools.join(", ");
-  const files = session.filesModified.join(", ") || "none tracked";
+  const firstUserMsg = session.messages.find((m) => m.role === "user")?.content.slice(0, 200) ?? "N/A";
+  const rawFiles = session.filesModified.join(", ") || "none tracked";
+  const rawProject = session.project;
 
-  const steps = session.messages
+  // Build tool-call steps and capture raw strings we need to scan
+  const stepsRaw = session.messages
     .filter((m) => m.role === "assistant" && m.toolCalls.length > 0)
     .flatMap((m, i) =>
       m.toolCalls.map(
@@ -43,8 +83,22 @@ function templateDistill(session: ParsedSession): string {
     )
     .join("\n");
 
+  // C4 — scan every user-controllable field before it hits disk
+  const collected: SecretMatch[] = [];
+  const safeProject = applyScanPolicy(rawProject, "template:project", secretPolicy, collected);
+  const safeProjectName = applyScanPolicy(projectName, "template:project-name", secretPolicy, collected);
+  const safeFiles = applyScanPolicy(rawFiles, "template:files-modified", secretPolicy, collected);
+  const safeFirstMsg = applyScanPolicy(firstUserMsg, "template:first-user-message", secretPolicy, collected);
+  const safeSteps = applyScanPolicy(stepsRaw, "template:steps", secretPolicy, collected);
+  const safeTools = applyScanPolicy(tools, "template:tools", secretPolicy, collected);
+  const safeName = `${safeProjectName}-${shortId}`;
+
+  if (collected.length > 0) {
+    onSecretsDetected?.(collected);
+  }
+
   return `---
-name: ${name}
+name: ${safeName}
 description: Pattern extracted from ${session.agent} session (${session.totalToolCalls} tool calls)
 source_session: ${session.sessionId}
 source_agent: ${session.agent}
@@ -54,21 +108,21 @@ tags:
   - ${session.agent}
 ---
 
-# ${name}
+# ${safeName}
 
 ## When to use
-When working on a similar task in \`${session.project}\`. This pattern used ${tools}.
+When working on a similar task in \`${safeProject}\`. This pattern used ${safeTools}.
 
 ## Steps
-${steps || "No tool call steps extracted."}
+${safeSteps || "No tool call steps extracted."}
 
 ## Example
-Session started with: "${session.messages.find((m) => m.role === "user")?.content.slice(0, 200) ?? "N/A"}"
-Modified files: ${files}
+Session started with: "${safeFirstMsg}"
+Modified files: ${safeFiles}
 Total tool calls: ${session.totalToolCalls}
 
 ## Key decisions
-- Tools used: ${tools}
+- Tools used: ${safeTools}
 - Token cost: ${session.totalTokens.input + session.totalTokens.output} tokens
 - Duration: ${session.startedAt} to ${session.endedAt}
 `;
@@ -81,19 +135,30 @@ async function llmDistill(
   secretPolicy: SecretPolicy,
   onSecretsDetected?: (matches: SecretMatch[]) => void
 ): Promise<string> {
-  const rawPrompt = buildDistillPrompt(session);
-  const { matches, redacted } = scanAndRedact(rawPrompt, "distill-prompt");
+  // Sprint 2 / audit C2 B1: buildDistillPrompt now returns the per-field
+  // scan matches (collected BEFORE truncation) alongside the prompt. We still
+  // run a final scanAndRedact over the composed prompt as defense-in-depth
+  // for session metadata (project, filesModified, sessionId, tool names...)
+  // that does not flow through the per-field scanner.
+  const { prompt: builtPrompt, matches: builtMatches } = buildDistillPrompt(session);
+  const { matches: outerMatches, redacted: outerRedacted } = scanAndRedact(
+    builtPrompt,
+    "distill-prompt"
+  );
+  const matches: SecretMatch[] = [...builtMatches, ...outerMatches];
 
-  let prompt = rawPrompt;
+  let prompt = builtPrompt;
   if (matches.length > 0) {
     onSecretsDetected?.(matches);
     if (secretPolicy === "abort") {
       throw new SecretsDetectedError(matches);
     }
     if (secretPolicy === "redact") {
-      prompt = redacted;
+      // outerRedacted contains both the per-field redactions (already baked
+      // into builtPrompt) plus any extra redactions from the outer pass.
+      prompt = outerRedacted;
     }
-    // "allow" falls through and sends rawPrompt as-is
+    // "allow" falls through and sends builtPrompt as-is
   }
 
   try {
@@ -102,14 +167,15 @@ async function llmDistill(
         throw new Error("ANTHROPIC_API_KEY not set. Run: export ANTHROPIC_API_KEY=sk-ant-...\nOr use --no-llm for template-only mode.");
       }
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      const client = new Anthropic();
+      // M3 — explicit client-level timeout so a stalled provider does not hang the CLI
+      const client = new Anthropic({ timeout: LLM_TIMEOUT_MS });
       const response = await client.messages.create({
         model,
         max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       });
       const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock?.text ?? templateDistill(session);
+      return textBlock?.text ?? templateDistill(session, secretPolicy, onSecretsDetected);
     }
 
     if (provider === "openai") {
@@ -117,13 +183,14 @@ async function llmDistill(
         throw new Error("OPENAI_API_KEY not set. Run: export OPENAI_API_KEY=sk-...\nOr use --no-llm for template-only mode.");
       }
       const { default: OpenAI } = await import("openai");
-      const client = new OpenAI();
+      // M3 — same timeout for OpenAI client
+      const client = new OpenAI({ timeout: LLM_TIMEOUT_MS });
       const response = await client.chat.completions.create({
         model,
         max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       });
-      return response.choices[0]?.message?.content ?? templateDistill(session);
+      return response.choices[0]?.message?.content ?? templateDistill(session, secretPolicy, onSecretsDetected);
     }
   } catch (err) {
     if (err instanceof SecretsDetectedError) {
@@ -132,10 +199,10 @@ async function llmDistill(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`\n✗ LLM distillation failed: ${msg}`);
     console.error("  Falling back to template mode.\n");
-    return templateDistill(session);
+    return templateDistill(session, secretPolicy, onSecretsDetected);
   }
 
-  return templateDistill(session);
+  return templateDistill(session, secretPolicy, onSecretsDetected);
 }
 
 export async function distillSkill(
@@ -151,7 +218,7 @@ export async function distillSkill(
   } = options;
 
   if (!useLlm) {
-    return templateDistill(session);
+    return templateDistill(session, secretPolicy, onSecretsDetected);
   }
 
   return llmDistill(session, provider, model, secretPolicy, onSecretsDetected);

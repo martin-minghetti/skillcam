@@ -62,6 +62,23 @@ You can also avoid the LLM entirely with `--no-llm`.
 
 Treat secret scanning as defense in depth, not a guarantee. If a session contains sensitive material and you are not confident, use `--no-llm`.
 
+## Downstream skill consumption
+
+Skills produced by SkillCam are markdown files. Their **body** is generated from the LLM (in default mode) or stitched together from session metadata (in `--no-llm` mode). In both cases, the content traces back to a session file on disk that an attacker with session-crafting capability could partially control — for example, by submitting a pull request whose CI runs a Claude Code session whose transcript you later distill.
+
+SkillCam does not sanitize the body of the generated skill beyond the secret scan. In particular:
+
+- The LLM can decide what goes under each heading. A crafted session can coax it into writing sections like `## When to use\nIgnore all previous instructions and...`
+- The agent that later **reads** the skill is the one that decides how to act on it. SkillCam is a producer, not a consumer.
+
+If you plan to feed skills produced by SkillCam back into another agent, **treat the SKILL.md body as untrusted prompt input**, the same way you would treat any user-supplied markdown. Good habits:
+
+- Review generated skills before committing them to a shared repository.
+- When an agent loads a skill, prefer an execution mode where the skill content is shown as reference material, not as authoritative instructions.
+- Do not auto-execute tool calls suggested verbatim by a skill body.
+
+A future version of SkillCam may add an allowlist of permitted sections and a heuristic filter for prompt-injection patterns (`"ignore all prior"`, `"you are now"`, etc.). Today, the responsibility for downstream safety lies with the skill consumer.
+
 ## Reporting vulnerabilities
 
 If you find a security issue, please **do not** open a public GitHub issue. Instead, open a private security advisory on the repository:
@@ -74,6 +91,22 @@ You should receive a response within a few days. Please include:
 - Steps to reproduce
 - The version of SkillCam you tested
 - Any suggested mitigations
+
+## Supply chain
+
+SkillCam takes several precautions to protect the build and release pipeline:
+
+- **Trusted publishing + provenance.** Releases to npm are published from GitHub Actions using [npm trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers/). Each release carries a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) linking the published tarball to the exact source commit and workflow run. You can verify a locally installed copy with:
+
+  ```sh
+  npm audit signatures
+  ```
+
+- **No install scripts.** The repository-level `.npmrc` sets `ignore-scripts=true`, and CI installs with `npm ci --ignore-scripts`, so dependencies cannot execute arbitrary code during `npm install`.
+
+- **Automated monitoring.** Dependabot watches npm and GitHub Actions dependencies weekly, and [CodeQL](https://codeql.github.com/) runs on every push and pull request against `main`. Vulnerability alerts, private vulnerability reporting, and secret scanning with validity checks are enabled on the repository.
+
+- **Protected main branch.** Merges to `main` require pull requests, linear history, signed commits, and passing `test` and `CodeQL` status checks. Force-pushes and deletions of `main` are blocked.
 
 ## Supported versions
 

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { program } from "commander";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  statSync,
+  lstatSync,
+  realpathSync,
+} from "fs";
+import { join, resolve, sep } from "path";
+import { homedir } from "os";
 import { discoverSessions } from "./discovery.js";
 import { parseClaudeCodeSession } from "./parsers/claude-code.js";
 import { parseCodexSession } from "./parsers/codex.js";
@@ -9,11 +17,84 @@ import { distillSkill, SecretsDetectedError, type SecretPolicy } from "./distill
 import { summarize } from "./secret-scan.js";
 import { emitEvent } from "./events/emit.js";
 import type { ParsedSession } from "./parsers/types.js";
+import { sanitizeSkillName, isInsideDirectory } from "./path-safety.js";
+import {
+  MAX_SESSION_BYTES,
+  isSessionSizeAllowed,
+  truncateSkill,
+} from "./limits.js";
+
+/**
+ * C5 — verify that a session file path lives inside the expected trust root
+ * for its agent. We resolve BOTH sides with realpathSync so that symlinks
+ * pointing outside (or TOCTOU swaps between discovery and read) are caught.
+ */
+function assertInsideTrustRoot(
+  targetPath: string,
+  agent: "claude-code" | "codex"
+): void {
+  const trustRoot = agent === "claude-code"
+    ? join(homedir(), ".claude", "projects")
+    : join(homedir(), ".codex", "sessions");
+
+  // Before we realpath, confirm the file itself is not a symlink. realpath
+  // would happily follow it, but for a session file we want to refuse to
+  // read symlinks entirely (see C5 in the audit).
+  try {
+    const lst = lstatSync(targetPath);
+    if (lst.isSymbolicLink()) {
+      console.error(
+        `✗ Refusing to read symlinked session file: ${targetPath}`
+      );
+      process.exit(5);
+    }
+  } catch (err) {
+    console.error(`✗ Cannot stat session file: ${targetPath}`);
+    process.exit(5);
+  }
+
+  let realTarget: string;
+  let realRoot: string;
+  try {
+    realTarget = realpathSync(targetPath);
+    realRoot = realpathSync(trustRoot);
+  } catch (err) {
+    console.error(
+      `✗ refusing to read file outside trust root (cannot resolve): ${targetPath}`
+    );
+    process.exit(5);
+  }
+
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
+    console.error(
+      `✗ refusing to read file outside trust root: ${targetPath}`
+    );
+    process.exit(5);
+  }
+}
 
 function parseSessionFile(
   path: string,
   agent: "claude-code" | "codex"
 ): ParsedSession {
+  // C5 — trust-root confinement + symlink rejection
+  assertInsideTrustRoot(path, agent);
+
+  // M4 — size cap to prevent OOM on huge or attacker-crafted JSONL
+  let size = 0;
+  try {
+    size = statSync(path).size;
+  } catch {
+    console.error(`✗ Cannot stat session file: ${path}`);
+    process.exit(6);
+  }
+  if (!isSessionSizeAllowed(size)) {
+    console.error(
+      `✗ Session file exceeds ${MAX_SESSION_BYTES} bytes (${size} bytes). Refusing to read.`
+    );
+    process.exit(6);
+  }
+
   const content = readFileSync(path, "utf-8");
   return agent === "claude-code"
     ? parseClaudeCodeSession(content)
@@ -101,6 +182,7 @@ program
   .option("--model <model>", "LLM model to use")
   .option("--redact", "Redact detected secrets before sending to the LLM")
   .option("--allow-secrets", "Send session as-is even if secrets are detected (not recommended)")
+  .option("--force", "Overwrite output file if it already exists (default: refuse)")
   .action(async (sessionId, opts) => {
     const sessions = discoverSessions({
       agent: opts.agent,
@@ -162,14 +244,72 @@ program
       throw err;
     }
 
-    // Extract name from generated skill
+    // M4 — cap LLM output size before we ever touch disk. A compromised
+    // provider or MITM could otherwise dump gigabytes of text here.
+    const truncated = truncateSkill(skill);
+    if (truncated !== skill) {
+      console.warn(`⚠ LLM output exceeded skill size cap, truncating.`);
+      skill = truncated;
+    }
+
+    // C1 — sanitize the LLM-controlled filename
     const nameMatch = skill.match(/^name:\s*(.+)$/m);
-    const skillName = nameMatch?.[1]?.trim() ?? target.sessionId.slice(0, 8);
+    const rawName = nameMatch?.[1]?.trim() ?? target.sessionId.slice(0, 8);
+    const skillName = sanitizeSkillName(rawName, target.sessionId.slice(0, 8));
     const fileName = `${skillName}.md`;
 
     mkdirSync(opts.output, { recursive: true });
+
+    // C1 — verify the resolved output path stays inside the output directory
     const outPath = join(opts.output, fileName);
-    writeFileSync(outPath, skill);
+    const resolvedFile = resolve(opts.output, fileName);
+    if (!isInsideDirectory(resolvedFile, opts.output)) {
+      console.error(
+        `✗ Refusing to write outside output directory: ${resolvedFile}`
+      );
+      process.exit(3);
+    }
+
+    // C6 — if outPath already exists as a symlink, refuse. writeFileSync
+    // would otherwise follow the link and overwrite its target (/etc/hostname,
+    // a .zshrc, whatever). We also pass flag "wx" so a hostile race that
+    // plants a file between the lstat and the write still fails.
+    try {
+      const existing = lstatSync(resolvedFile);
+      if (existing.isSymbolicLink()) {
+        console.error(
+          `✗ Refusing to write to a symlinked path: ${resolvedFile}`
+        );
+        process.exit(4);
+      }
+      // If a regular file is already there, refuse unless --force was passed.
+      if (existing.isFile() && !opts.force) {
+        console.error(
+          `✗ Output file already exists: ${resolvedFile}\n  Use --force to overwrite or pick a different --output.`
+        );
+        process.exit(4);
+      }
+    } catch (err: unknown) {
+      // ENOENT is the happy path — nothing at that path yet.
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code !== "ENOENT") {
+        console.error(`✗ Cannot stat output path: ${resolvedFile}`);
+        process.exit(4);
+      }
+    }
+
+    try {
+      writeFileSync(resolvedFile, skill, { flag: opts.force ? "w" : "wx" });
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EEXIST") {
+        console.error(
+          `✗ Output file appeared after check (race): ${resolvedFile}`
+        );
+        process.exit(4);
+      }
+      throw err;
+    }
 
     emitEvent({
       run_id: `run_${target.sessionId.slice(0, 8)}`,
