@@ -1,22 +1,56 @@
 import type { ParsedSession } from "./parsers/types.js";
+import { scanAndRedactTruncate, type SecretMatch } from "./secret-scan.js";
 
-export function buildDistillPrompt(session: ParsedSession): string {
+export interface BuildDistillPromptResult {
+  prompt: string;
+  matches: SecretMatch[];
+}
+
+/**
+ * Build the distillation prompt from a parsed session.
+ *
+ * Sprint 2 / audit C2 B1 fix: we previously did `m.content.slice(0, 500)` and
+ * `JSON.stringify(tc.input).slice(0, 200)` *before* the distiller ran the
+ * secret scanner over the final prompt string. A long-enough padded message
+ * let an attacker push a real API key into the slice-cut zone so the scanner
+ * saw only its first few chars (below the 20-char regex minimum).
+ *
+ * Every user-controllable field now passes through `scanAndRedactTruncate`,
+ * which scans first (on the full, normalized text) and truncates second.
+ * Matches from each field are collected and returned so the caller can apply
+ * its `abort | redact | allow` policy uniformly.
+ */
+export function buildDistillPrompt(session: ParsedSession): BuildDistillPromptResult {
+  const matches: SecretMatch[] = [];
+
   const toolSummary = session.messages
-    .flatMap((m) => m.toolCalls)
-    .map((tc) => `- ${tc.name}: ${JSON.stringify(tc.input).slice(0, 200)}`)
+    .flatMap((m, mi) =>
+      m.toolCalls.map((tc, ti) => {
+        const raw = `- ${tc.name}: ${JSON.stringify(tc.input)}`;
+        const scanned = scanAndRedactTruncate(
+          raw,
+          200 + tc.name.length + 4, // keep the "- name: " prefix budget
+          `tool-call[${mi}][${ti}]`
+        );
+        matches.push(...scanned.matches);
+        return scanned.redacted;
+      })
+    )
     .join("\n");
 
   const conversation = session.messages
-    .map((m) => {
+    .map((m, mi) => {
+      const scanned = scanAndRedactTruncate(m.content, 500, `message[${mi}]`);
+      matches.push(...scanned.matches);
       const toolInfo =
         m.toolCalls.length > 0
           ? `\n  [Tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
           : "";
-      return `${m.role}: ${m.content.slice(0, 500)}${toolInfo}`;
+      return `${m.role}: ${scanned.redacted}${toolInfo}`;
     })
     .join("\n\n");
 
-  return `You are a skill extraction engine. Analyze this AI agent session and distill the successful pattern into a reusable skill.
+  const prompt = `You are a skill extraction engine. Analyze this AI agent session and distill the successful pattern into a reusable skill.
 
 ## Session Info
 - Agent: ${session.agent}
@@ -67,4 +101,6 @@ Rules:
 - Include actual file paths, commands, or patterns from the session
 - The skill should be usable by someone who never saw the original session
 - Keep it under 100 lines`;
+
+  return { prompt, matches };
 }
