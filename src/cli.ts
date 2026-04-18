@@ -10,6 +10,7 @@ import {
 } from "fs";
 import { join, resolve, sep } from "path";
 import { homedir } from "os";
+import { createRequire } from "node:module";
 import { discoverSessions } from "./discovery.js";
 import { parseClaudeCodeSession } from "./parsers/claude-code.js";
 import { parseCodexSession } from "./parsers/codex.js";
@@ -23,6 +24,10 @@ import {
   isSessionSizeAllowed,
   truncateSkill,
 } from "./limits.js";
+import { scheduleUpdateCheck } from "./update-check.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
 
 /**
  * C5 — verify that a session file path lives inside the expected trust root
@@ -106,7 +111,9 @@ program
   .description(
     "Turn successful AI agent runs into reusable markdown skills"
   )
-  .version("0.1.0");
+  .version(pkg.version);
+
+scheduleUpdateCheck(pkg.version);
 
 program
   .command("list")
