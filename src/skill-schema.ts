@@ -58,11 +58,30 @@ export function sanitizeSkillOutput(skill: string): SanitizeSkillResult {
     );
   }
 
-  // 2. Strip HTML comments.
-  const comments = out.match(HTML_COMMENT_RE);
-  if (comments && comments.length > 0) {
-    out = out.replace(HTML_COMMENT_RE, "");
-    violations.push(`stripped ${comments.length} HTML comment block(s)`);
+  // 2. Strip HTML comments. A single regex pass is insufficient because
+  // nested / overlapping payloads like `<!-<!--DELETEME-->- evil -->` leave
+  // a surviving `<!-- evil -->` after the inner match is removed. Loop to a
+  // fixed point, then strip any lone `<!--` / `-->` delimiters so malformed
+  // or unclosed comments can't smuggle instructions either.
+  let commentsStripped = 0;
+  while (true) {
+    const matches = out.match(HTML_COMMENT_RE);
+    if (!matches) break;
+    commentsStripped += matches.length;
+    const next = out.replace(HTML_COMMENT_RE, "");
+    if (next === out) break;
+    out = next;
+  }
+  const LONE_COMMENT_DELIM_RE = /<!--|-->/g;
+  const loneDelims = out.match(LONE_COMMENT_DELIM_RE);
+  if (loneDelims) {
+    out = out.replace(LONE_COMMENT_DELIM_RE, "");
+    commentsStripped += loneDelims.length;
+  }
+  if (commentsStripped > 0) {
+    violations.push(
+      `stripped ${commentsStripped} HTML comment block(s)/delimiter(s)`
+    );
   }
 
   // 3. Collapse nested 4+-backtick fences down to safe triple-backticks.
