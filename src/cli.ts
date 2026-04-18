@@ -20,6 +20,10 @@ import { emitEvent } from "./events/emit.js";
 import type { ParsedSession } from "./parsers/types.js";
 import { sanitizeSkillName, isInsideDirectory } from "./path-safety.js";
 import {
+  sanitizeForTerminal,
+  sanitizeListForTerminal,
+} from "./terminal-safety.js";
+import {
   MAX_SESSION_BYTES,
   isSessionSizeAllowed,
   truncateSkill,
@@ -162,20 +166,25 @@ program
     }
 
     const parsed = parseSessionFile(target.path, target.agent);
-    console.log(`\nSession: ${parsed.sessionId.slice(0, 8)}...`);
-    console.log(`Agent:   ${parsed.agent}`);
-    console.log(`Project: ${parsed.project}`);
-    console.log(`Branch:  ${parsed.branch}`);
+    // A1 — every string field below originates in the session JSONL and is
+    // attacker-controllable. Strip control chars so a hostile `cwd` can't
+    // inject ANSI escapes (clear-screen, color overrides, OSC title set) or
+    // newlines that fake skillcam's own output format.
+    console.log(`\nSession: ${sanitizeForTerminal(parsed.sessionId).slice(0, 8)}...`);
+    console.log(`Agent:   ${sanitizeForTerminal(parsed.agent)}`);
+    console.log(`Project: ${sanitizeForTerminal(parsed.project)}`);
+    console.log(`Branch:  ${sanitizeForTerminal(parsed.branch)}`);
     console.log(
       `Messages: ${parsed.summary.userMessages} user, ${parsed.summary.assistantMessages} assistant`
     );
     console.log(
-      `Tools:   ${parsed.totalToolCalls} calls (${parsed.summary.uniqueTools.join(", ")})`
+      `Tools:   ${parsed.totalToolCalls} calls (${sanitizeListForTerminal(parsed.summary.uniqueTools).join(", ")})`
     );
     console.log(
       `Tokens:  ${parsed.totalTokens.input} in / ${parsed.totalTokens.output} out`
     );
-    console.log(`Files:   ${parsed.filesModified.join(", ") || "none tracked"}`);
+    const files = sanitizeListForTerminal(parsed.filesModified);
+    console.log(`Files:   ${files.join(", ") || "none tracked"}`);
   });
 
 program
@@ -205,7 +214,7 @@ program
     }
 
     console.log(
-      `\n✓ Read session ${target.sessionId.slice(0, 8)}... (${target.agent})`
+      `\n✓ Read session ${sanitizeForTerminal(target.sessionId).slice(0, 8)}... (${sanitizeForTerminal(target.agent)})`
     );
 
     const parsed = parseSessionFile(target.path, target.agent);
