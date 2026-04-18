@@ -233,72 +233,41 @@ See [`examples/skills/`](examples/skills/) for real skills generated from actual
 
 ## Project Structure
 
-### Architecture
+The code is grouped by role. Each layer has one job.
+
+### Data flow
 
 ```mermaid
-flowchart TB
-    CLI["<b>cli.ts</b><br/><sub>commander entry<br/>list · preview · distill</sub>"]
-
-    subgraph CORE["Core"]
-        direction LR
-        DISCOVERY["<b>discovery.ts</b><br/><sub>find sessions<br/>on disk</sub>"]
-        DISTILLER["<b>distiller.ts</b><br/><sub>orchestrate<br/>LLM vs template</sub>"]
-        PROMPT["<b>distiller-prompt.ts</b><br/><sub>build LLM prompt</sub>"]
-    end
-
-    subgraph PARSERS["parsers/"]
-        direction LR
-        CLAUDE["<b>claude-code.ts</b><br/><sub>Claude Code<br/>JSONL format</sub>"]
-        CODEX["<b>codex.ts</b><br/><sub>Codex CLI<br/>JSONL format</sub>"]
-        PTYPES["<b>types.ts</b><br/><sub>ParsedSession<br/>shared shape</sub>"]
-    end
-
-    subgraph EVENTS["events/"]
-        direction LR
-        EMIT["<b>emit.ts</b><br/><sub>append to<br/>events.jsonl</sub>"]
-        ETYPES["<b>types.ts</b><br/><sub>AgentEvent<br/>schema</sub>"]
-    end
-
-    CLI --> DISCOVERY
-    CLI --> PARSERS
-    CLI --> DISTILLER
-    CLI --> EMIT
-    DISTILLER --> PROMPT
-    PARSERS -.->|typed session| DISTILLER
+flowchart LR
+    CLI["CLI"] --> DISC["Discovery"]
+    DISC --> PARSE["Parsers"]
+    PARSE --> DIST["Distiller"]
+    DIST --> OUT["SKILL.md"]
+    DIST --> EV["Events log"]
 
     style CLI fill:#b45309,stroke:#a16207,color:#fff
-    style DISCOVERY fill:#1e40af,stroke:#1d4ed8,color:#fff
-    style DISTILLER fill:#15803d,stroke:#166534,color:#fff
-    style PROMPT fill:#15803d,stroke:#166534,color:#fff
-    style CLAUDE fill:#6b21a8,stroke:#581c87,color:#fff
-    style CODEX fill:#6b21a8,stroke:#581c87,color:#fff
-    style PTYPES fill:#4c1d95,stroke:#3b0764,color:#fff
-    style EMIT fill:#be123c,stroke:#9f1239,color:#fff
-    style ETYPES fill:#9f1239,stroke:#881337,color:#fff
-    style CORE fill:#0f172a,stroke:#334155,color:#fff
-    style PARSERS fill:#0f172a,stroke:#334155,color:#fff
-    style EVENTS fill:#0f172a,stroke:#334155,color:#fff
+    style DISC fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style PARSE fill:#6b21a8,stroke:#581c87,color:#fff
+    style DIST fill:#15803d,stroke:#166534,color:#fff
+    style OUT fill:#047857,stroke:#065f46,color:#fff
+    style EV fill:#be123c,stroke:#9f1239,color:#fff
 ```
 
-### File tree
+### Files by layer
 
-```
-skillcam/
-├── src/
-│   ├── cli.ts               ← CLI entry point (commander)
-│   ├── discovery.ts         ← finds session logs on disk
-│   ├── distiller.ts         ← LLM and template distillation
-│   ├── distiller-prompt.ts  ← prompt builder for LLM mode
-│   ├── parsers/
-│   │   ├── claude-code.ts   ← Claude Code JSONL parser
-│   │   ├── codex.ts         ← Codex CLI JSONL parser
-│   │   └── types.ts         ← ParsedSession shared type
-│   └── events/
-│       ├── emit.ts          ← appends to events.jsonl
-│       └── types.ts         ← AgentEvent schema
-├── examples/skills/         ← real skills generated from sessions
-└── tests/                   ← Vitest suite
-```
+| Layer | File | Purpose |
+|-------|------|---------|
+| **CLI** | `src/cli.ts` | Commander entry — `list`, `preview`, `distill` |
+| **Discovery** | `src/discovery.ts` | Finds session logs in `~/.claude/projects/` and `~/.codex/sessions/` |
+| **Parsers** | `src/parsers/claude-code.ts` | Parses Claude Code JSONL format |
+|  | `src/parsers/codex.ts` | Parses Codex CLI JSONL format |
+|  | `src/parsers/types.ts` | `ParsedSession` shared shape |
+| **Distiller** | `src/distiller.ts` | Orchestrates LLM vs template mode |
+|  | `src/distiller-prompt.ts` | Builds the LLM prompt |
+| **Events** | `src/events/emit.ts` | Appends structured events to `events.jsonl` |
+|  | `src/events/types.ts` | `AgentEvent` schema |
+| **Examples** | `examples/skills/` | Real skills generated from sessions |
+| **Tests** | `tests/` | Vitest suite |
 
 ## Contributing
 
