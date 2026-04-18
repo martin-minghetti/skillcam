@@ -67,7 +67,7 @@ SkillCam reads an agent session from disk, extracts what worked, and writes a `S
 ### The loop it creates
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/loop.png" alt="The loop: agent solves → session.jsonl → skillcam distill → SKILL.md → agent reuses" width="900">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/loop.svg" alt="The loop: agent solves → session.jsonl → skillcam distill → SKILL.md → agent reuses" width="900">
 </p>
 
 One session becomes one skill. One skill turns the next run from a fresh discovery into a quick execution.
@@ -75,7 +75,7 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 ### The pipeline
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/pipeline.png" alt="Pipeline: discover → parse → distill (LLM or template) → emit → SKILL.md" width="500">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/pipeline.svg" alt="Pipeline: discover → parse → distill (LLM or template) → emit → SKILL.md" width="600">
 </p>
 
 ### Two distill modes
@@ -228,7 +228,7 @@ The code is grouped by role. Each layer has one job.
 ### Data flow
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/data-flow.png" alt="Data flow: CLI → Discovery → Parsers → Distiller → SKILL.md + Events log" width="900">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/data-flow.svg" alt="Data flow: CLI → Discovery → Parsers → Distiller → SKILL.md + Events log" width="900">
 </p>
 
 ### Files by layer

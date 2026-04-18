@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 720" fill="none">
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .label { fill: #e2e8f0; font-size: 14px; font-weight: 600; }
+    .sublabel { fill: #94a3b8; font-size: 11px; }
+    .agent-label { fill: #e2e8f0; font-size: 12px; font-weight: 600; }
+    .agent-sub { fill: #94a3b8; font-size: 10px; }
+    .tag { fill: #64748b; font-size: 9px; font-weight: 500; letter-spacing: 0.5px; }
+    .edge-label { fill: #cbd5e1; font-size: 10px; font-weight: 500; }
+    .arrow { stroke: #475569; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+    .box { rx: 8; ry: 8; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Input -->
+  <rect x="120" y="16" width="360" height="60" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="300" y="40" text-anchor="middle" class="label">Session logs</text>
+  <text x="300" y="57" text-anchor="middle" class="sublabel">~/.claude/projects/*.jsonl</text>
+  <text x="300" y="70" text-anchor="middle" class="sublabel">~/.codex/sessions/*.jsonl</text>
+
+  <line x1="300" y1="76" x2="300" y2="104" class="arrow"/>
+
+  <!-- 1. Discover -->
+  <rect x="150" y="104" width="300" height="56" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="300" y="127" text-anchor="middle" class="label">1. Discover</text>
+  <text x="300" y="145" text-anchor="middle" class="sublabel">Scan session dirs, sort by recency</text>
+
+  <line x1="300" y1="160" x2="300" y2="188" class="arrow"/>
+
+  <!-- 2. Parse -->
+  <rect x="150" y="188" width="300" height="56" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="300" y="211" text-anchor="middle" class="label">2. Parse</text>
+  <text x="300" y="229" text-anchor="middle" class="sublabel">Messages, tool calls, files, tokens</text>
+
+  <line x1="300" y1="244" x2="300" y2="272" class="arrow"/>
+
+  <!-- 3. Distill subgraph -->
+  <rect x="30" y="272" width="540" height="184" class="box" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="300" y="294" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="600" font-family="system-ui, sans-serif">3. Distill</text>
+  <text x="300" y="309" text-anchor="middle" class="sublabel" fill="#64748b">One runs per session</text>
+
+  <!-- LLM mode card -->
+  <rect x="60" y="328" width="230" height="110" rx="6" ry="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="175" y="350" text-anchor="middle" class="agent-label">LLM mode</text>
+  <text x="175" y="367" text-anchor="middle" class="agent-sub">Sends session to Claude or GPT</text>
+  <text x="175" y="381" text-anchor="middle" class="agent-sub">with a distillation prompt.</text>
+  <text x="175" y="395" text-anchor="middle" class="agent-sub">Produces narrative skills.</text>
+  <text x="175" y="423" text-anchor="middle" class="tag">DEFAULT · anthropic · openai</text>
+
+  <!-- Template mode card -->
+  <rect x="310" y="328" width="230" height="110" rx="6" ry="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="425" y="350" text-anchor="middle" class="agent-label">Template mode</text>
+  <text x="425" y="367" text-anchor="middle" class="agent-sub">Extracts steps directly from</text>
+  <text x="425" y="381" text-anchor="middle" class="agent-sub">tool calls. Deterministic,</text>
+  <text x="425" y="395" text-anchor="middle" class="agent-sub">zero network calls.</text>
+  <text x="425" y="423" text-anchor="middle" class="tag">--no-llm · FALLBACK</text>
+
+  <line x1="300" y1="456" x2="300" y2="488" class="arrow"/>
+
+  <!-- 4. Emit -->
+  <rect x="150" y="488" width="300" height="56" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="300" y="511" text-anchor="middle" class="label">4. Emit</text>
+  <text x="300" y="529" text-anchor="middle" class="sublabel">Append run metadata to events.jsonl</text>
+
+  <line x1="300" y1="544" x2="300" y2="576" class="arrow"/>
+
+  <!-- Output -->
+  <rect x="180" y="576" width="240" height="60" class="box" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+  <text x="300" y="600" text-anchor="middle" class="label" fill="#34d399">SKILL.md</text>
+  <text x="300" y="618" text-anchor="middle" class="sublabel" fill="#10b981">Reusable skill for the next agent run</text>
+</svg>

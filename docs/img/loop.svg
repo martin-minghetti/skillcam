@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" fill="none">
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .label { fill: #e2e8f0; font-size: 14px; font-weight: 600; }
+    .sublabel { fill: #94a3b8; font-size: 11px; }
+    .edge-label { fill: #cbd5e1; font-size: 11px; font-weight: 500; }
+    .arrow { stroke: #475569; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+    .arrow-dashed { stroke: #475569; stroke-width: 2; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrowhead); }
+    .box { rx: 8; ry: 8; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Agent solves -->
+  <rect x="20" y="60" width="180" height="72" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="110" y="86" text-anchor="middle" class="label">Agent solves</text>
+  <text x="110" y="104" text-anchor="middle" class="sublabel">a new problem</text>
+  <text x="110" y="121" text-anchor="middle" class="sublabel" fill="#64748b">15 min · 50k tokens</text>
+
+  <line x1="200" y1="96" x2="260" y2="96" class="arrow"/>
+
+  <!-- session.jsonl -->
+  <rect x="260" y="72" width="160" height="48" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="340" y="93" text-anchor="middle" class="label">session.jsonl</text>
+  <text x="340" y="109" text-anchor="middle" class="sublabel" fill="#64748b">recorded run</text>
+
+  <line x1="420" y1="96" x2="540" y2="96" class="arrow"/>
+  <text x="480" y="86" text-anchor="middle" class="edge-label">skillcam distill</text>
+
+  <!-- SKILL.md -->
+  <rect x="540" y="72" width="140" height="48" class="box" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+  <text x="610" y="93" text-anchor="middle" class="label" fill="#34d399">SKILL.md</text>
+  <text x="610" y="109" text-anchor="middle" class="sublabel" fill="#10b981">reusable</text>
+
+  <line x1="680" y1="96" x2="740" y2="96" class="arrow"/>
+
+  <!-- Agent reuses -->
+  <rect x="740" y="60" width="200" height="72" class="box" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="840" y="86" text-anchor="middle" class="label">Agent reuses the skill</text>
+  <text x="840" y="104" text-anchor="middle" class="sublabel">next time</text>
+  <text x="840" y="121" text-anchor="middle" class="sublabel" fill="#64748b">3 min · 8k tokens</text>
+
+  <!-- loop back: from right side of Agent reuses down and back to Agent solves -->
+  <path d="M 840 132 Q 840 200 480 200 Q 110 200 110 132" class="arrow-dashed"/>
+  <rect x="420" y="188" width="120" height="24" rx="4" ry="4" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <text x="480" y="204" text-anchor="middle" class="edge-label">next problem</text>
+</svg>

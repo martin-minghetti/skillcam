@@ -1,6 +1,6 @@
 {
   "name": "skillcam",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
@@ -15,8 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
-    "test": "vitest run",
-    "docs:diagrams": "for d in loop pipeline data-flow; do mmdc -i docs/img/$d.mmd -o docs/img/$d.png -b white -w 1400 -p docs/img/puppeteer-config.json; done"
+    "test": "vitest run"
   },
   "keywords": [
     "ai",
