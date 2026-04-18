@@ -1,4 +1,5 @@
 import type { ParsedSession, SessionMessage, ToolCall } from "./types.js";
+import { MAX_LINE_BYTES } from "../limits.js";
 
 interface RawEntry {
   type: string;
@@ -21,11 +22,16 @@ interface RawEntry {
   parentUuid?: string;
 }
 
+// M4 — per-line cap. A single 100MB JSONL line is a CPU/memory DoS vector;
+// MAX_LINE_BYTES is imported from ../limits.js at the top of the file.
+
 export function parseClaudeCodeSession(jsonl: string): ParsedSession {
   const lines = jsonl.trim().split("\n");
   const entries: RawEntry[] = [];
 
   for (const line of lines) {
+    // M4 — skip over-long lines before handing to JSON.parse
+    if (line.length > MAX_LINE_BYTES) continue;
     try {
       entries.push(JSON.parse(line));
     } catch {

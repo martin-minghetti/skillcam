@@ -6,7 +6,10 @@ export interface ToolCall {
 }
 
 export interface SessionMessage {
-  role: "user" | "assistant" | "system";
+  // M5 — `developer` is a distinct Codex role (system-level instructions).
+  // It must NOT be folded into `user` because the distiller prompt treats
+  // user messages as conversation content. See src/parsers/codex.ts.
+  role: "user" | "assistant" | "system" | "developer";
   content: string;
   timestamp: string;
   toolCalls: ToolCall[];
