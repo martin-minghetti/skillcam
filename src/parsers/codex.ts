@@ -1,4 +1,8 @@
 import type { ParsedSession, SessionMessage, ToolCall } from "./types.js";
+import { MAX_LINE_BYTES } from "../limits.js";
+
+// M4 — per-line cap. JSON.parse on a 100MB single line is a CPU/memory DoS.
+// Anything over 1MB in a JSONL line is almost certainly adversarial.
 
 interface CodexEntry {
   timestamp: string;
@@ -11,6 +15,8 @@ export function parseCodexSession(jsonl: string): ParsedSession {
   const entries: CodexEntry[] = [];
 
   for (const line of lines) {
+    // M4 — reject pathologically large lines before JSON.parse
+    if (line.length > MAX_LINE_BYTES) continue;
     try {
       entries.push(JSON.parse(line));
     } catch {
@@ -67,9 +73,19 @@ export function parseCodexSession(jsonl: string): ParsedSession {
       // Skip reasoning entries
       if (p.type === "reasoning") continue;
 
-      const role = p.role === "user" || p.role === "developer"
-        ? "user" as const
-        : "assistant" as const;
+      // M5 — `developer` is a distinct Codex role. It carries system-level
+      // instructions (and sometimes bootstrap secrets). Previously it was
+      // folded into `user`, which meant developer content reached the
+      // distiller prompt as if the user had typed it.
+      //
+      // We now preserve the role. The distiller prompt (src/distiller-prompt.ts
+      // — Sprint 2) must exclude `developer` messages from the conversation
+      // payload so their contents do not leave the machine in LLM mode.
+      // TODO(sprint-2): filter role === "developer" out of buildDistillPrompt().
+      let role: SessionMessage["role"];
+      if (p.role === "user") role = "user";
+      else if (p.role === "developer") role = "developer";
+      else role = "assistant";
 
       const content = Array.isArray(p.content)
         ? p.content
@@ -78,7 +94,7 @@ export function parseCodexSession(jsonl: string): ParsedSession {
             .join("")
         : "";
 
-      if (!content && role === "user") continue; // skip empty system messages
+      if (!content && (role === "user" || role === "developer")) continue; // skip empty system messages
 
       messages.push({
         role,

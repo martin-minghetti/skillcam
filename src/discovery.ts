@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "fs";
+import { readdirSync, lstatSync, type Stats } from "fs";
 import { join, basename } from "path";
 import { homedir } from "os";
 
@@ -15,6 +15,23 @@ interface DiscoverOptions {
   limit?: number;
 }
 
+/**
+ * C5 — use lstatSync (not statSync) so we see the link itself, not the target.
+ * Symlinks are skipped silently: they may be benign but they let an attacker
+ * with disk access point a .jsonl name at /etc/passwd or at a file outside the
+ * trust root. trust-root confinement is enforced at read time in cli.ts.
+ */
+function statIfRegularFile(path: string): Stats | null {
+  try {
+    const st = lstatSync(path) as Stats;
+    if (st.isSymbolicLink()) return null;
+    if (!st.isFile()) return null;
+    return st;
+  } catch {
+    return null;
+  }
+}
+
 function findClaudeCodeSessions(): DiscoveredSession[] {
   const baseDir = join(homedir(), ".claude", "projects");
   const sessions: DiscoveredSession[] = [];
@@ -23,13 +40,23 @@ function findClaudeCodeSessions(): DiscoveredSession[] {
     const projectDirs = readdirSync(baseDir);
     for (const dir of projectDirs) {
       const projectPath = join(baseDir, dir);
+      // C5 — skip symlinked project directories too
+      try {
+        const dirStat = lstatSync(projectPath);
+        if (dirStat.isSymbolicLink()) continue;
+        if (!dirStat.isDirectory()) continue;
+      } catch {
+        continue;
+      }
+
       try {
         const files = readdirSync(projectPath).filter((f) =>
           f.endsWith(".jsonl")
         );
         for (const file of files) {
           const fullPath = join(projectPath, file);
-          const stat = statSync(fullPath);
+          const stat = statIfRegularFile(fullPath);
+          if (!stat) continue; // symlinks / non-files silently skipped
           sessions.push({
             sessionId: basename(file, ".jsonl"),
             agent: "claude-code",
@@ -58,10 +85,15 @@ function findCodexSessions(): DiscoveredSession[] {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = join(dir, entry.name);
+        // C5 — Dirent.isDirectory()/isFile() uses lstat semantics for name
+        // entries; symbolic links report isSymbolicLink()=true here, so
+        // recursing only into isDirectory() already excludes symlinked dirs.
+        if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) {
           walkDir(fullPath);
-        } else if (entry.name.endsWith(".jsonl")) {
-          const stat = statSync(fullPath);
+        } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+          const stat = statIfRegularFile(fullPath);
+          if (!stat) continue;
           sessions.push({
             sessionId: basename(entry.name, ".jsonl"),
             agent: "codex",
