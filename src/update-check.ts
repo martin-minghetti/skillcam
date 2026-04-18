@@ -1,4 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +14,33 @@ const CACHE_FILE = join(CACHE_DIR, "update-check.json");
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REGISTRY_URL = "https://registry.npmjs.org/skillcam/latest";
 const REGISTRY_TIMEOUT_MS = 2000;
+
+/**
+ * U2 — accept only plain semver strings (with optional prerelease/build) so a
+ * compromised registry, MITM, or planted cache file can't smuggle ANSI escape
+ * codes / newlines / shell-like text into our `console.error` notification.
+ *
+ * Anchored ^...$ — the entire field must match.
+ */
+const SAFE_VERSION_RE =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function isSafeVersion(v: unknown): v is string {
+  return typeof v === "string" && SAFE_VERSION_RE.test(v);
+}
+
+/**
+ * U3 — guard against non-finite numbers (Infinity, NaN) and absurdly
+ * future-dated timestamps that would freeze the cache forever.
+ */
+function isSafeCheckedAt(t: unknown): t is number {
+  return (
+    typeof t === "number" &&
+    Number.isFinite(t) &&
+    t > 0 &&
+    t <= Date.now() + 60_000
+  );
+}
 
 type CacheEntry = {
   latest: string;
@@ -43,15 +77,22 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-function readCache(): CacheEntry | null {
+/**
+ * Exported for tests. Production callers omit the path args.
+ */
+export function readCache(file: string = CACHE_FILE): CacheEntry | null {
   try {
-    const raw = readFileSync(CACHE_FILE, "utf-8");
+    const raw = readFileSync(file, "utf-8");
     const data = JSON.parse(raw) as unknown;
     if (
       typeof data === "object" &&
       data !== null &&
-      typeof (data as CacheEntry).latest === "string" &&
-      typeof (data as CacheEntry).checkedAt === "number"
+      // U2 — same validation as fetchLatest. A planted cache file can't
+      // smuggle ANSI/newlines past us at read time either.
+      isSafeVersion((data as CacheEntry).latest) &&
+      // U3 — Infinity / NaN are typeof "number" but break the freshness math
+      // (now - Infinity === -Infinity → always "fresh"); reject them.
+      isSafeCheckedAt((data as CacheEntry).checkedAt)
     ) {
       return data as CacheEntry;
     }
@@ -61,12 +102,46 @@ function readCache(): CacheEntry | null {
   return null;
 }
 
-function writeCache(entry: CacheEntry): void {
+/**
+ * Exported for tests. Production callers omit the path args.
+ */
+export function writeCache(
+  entry: CacheEntry,
+  file: string = CACHE_FILE,
+  dir: string = CACHE_DIR
+): void {
+  // U1 — write atomically via tmp + rename so a planted symlink at `file`
+  // never gets followed. With O_EXCL on the tmp file (`flag: "wx"`), even a
+  // TOCTOU race that pre-plants the tmp path fails. The final renameSync
+  // removes whatever was at `file` (regular file, symlink) without writing
+  // through it.
+  //
+  // U4 — mkdirSync only applies `mode` at creation. If `dir` already
+  // existed as 0o777 (e.g. another process created it), enforce 0o700 now.
+  let tmp: string | null = null;
   try {
-    mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
-    writeFileSync(CACHE_FILE, JSON.stringify(entry), { mode: 0o600 });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // best-effort: on platforms where chmod is a no-op (Windows), skip.
+    }
+    tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600, flag: "wx" });
+    renameSync(tmp, file);
+    tmp = null;
   } catch {
     // Cache is a best-effort optimization; losing it is harmless.
+  } finally {
+    // If rename failed but the tmp file landed on disk, clean it up so we
+    // don't pollute `dir` with leftovers.
+    if (tmp !== null) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 
@@ -80,7 +155,10 @@ async function fetchLatest(): Promise<string | null> {
     const data = (await res.json()) as unknown;
     if (typeof data !== "object" || data === null) return null;
     const version = (data as { version?: unknown }).version;
-    return typeof version === "string" ? version : null;
+    // U2 — refuse any string that doesn't look like a plain semver. We never
+    // want to interpolate an attacker-controlled string into console.error
+    // (ANSI escape codes, newlines, fake "Run: curl evil.sh" lines).
+    return isSafeVersion(version) ? version : null;
   } catch {
     return null;
   }

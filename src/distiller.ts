@@ -140,7 +140,18 @@ async function llmDistill(
   // run a final scanAndRedact over the composed prompt as defense-in-depth
   // for session metadata (project, filesModified, sessionId, tool names...)
   // that does not flow through the per-field scanner.
-  const { prompt: builtPrompt, matches: builtMatches } = buildDistillPrompt(session);
+  const {
+    prompt: builtPrompt,
+    matches: builtMatches,
+    truncatedMessageCount,
+  } = buildDistillPrompt(session);
+  if (truncatedMessageCount > 0) {
+    // B1 — surface the cost-protection truncation so the user knows why some
+    // of their session didn't reach the LLM.
+    console.warn(
+      `⚠ Session has ${session.messages.length} messages, capping to the most recent ${session.messages.length - truncatedMessageCount} (B1 billing guard).`
+    );
+  }
   const { matches: outerMatches, redacted: outerRedacted } = scanAndRedact(
     builtPrompt,
     "distill-prompt"
