@@ -1,5 +1,25 @@
+import { basename, relative, isAbsolute } from "path";
 import type { ParsedSession } from "./parsers/types.js";
 import { scanAndRedactTruncate, type SecretMatch } from "./secret-scan.js";
+
+/**
+ * Sprint 4 — trim absolute paths out of prompt metadata. The LLM still gets
+ * the project name and each file name for context, but the full
+ * /Users/<you>/<private-dir> prefix never leaves the machine.
+ *
+ * - Files inside the project → relative path ("src/foo.ts")
+ * - Files outside the project → basename only ("other.ts")
+ * - Relative inputs pass through unchanged
+ */
+function stripPath(p: string, projectRoot: string): string {
+  if (!p) return p;
+  if (!isAbsolute(p)) return p;
+  if (isAbsolute(projectRoot)) {
+    const rel = relative(projectRoot, p);
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+  }
+  return basename(p);
+}
 
 export interface BuildDistillPromptResult {
   prompt: string;
@@ -50,14 +70,21 @@ export function buildDistillPrompt(session: ParsedSession): BuildDistillPromptRe
     })
     .join("\n\n");
 
+  const projectName = isAbsolute(session.project)
+    ? basename(session.project)
+    : session.project;
+  const strippedFiles = session.filesModified.map((f) =>
+    stripPath(f, session.project)
+  );
+
   const prompt = `You are a skill extraction engine. Analyze this AI agent session and distill the successful pattern into a reusable skill.
 
 ## Session Info
 - Agent: ${session.agent}
-- Project: ${session.project}
+- Project: ${projectName}
 - Tool calls: ${session.totalToolCalls}
 - Tools used: ${session.summary.uniqueTools.join(", ")}
-- Files modified: ${session.filesModified.join(", ")}
+- Files modified: ${strippedFiles.join(", ")}
 
 ## Tool Calls
 ${toolSummary}

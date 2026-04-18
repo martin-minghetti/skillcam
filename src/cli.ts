@@ -182,6 +182,7 @@ program
   .option("--model <model>", "LLM model to use")
   .option("--redact", "Redact detected secrets before sending to the LLM")
   .option("--allow-secrets", "Send session as-is even if secrets are detected (not recommended)")
+  .option("--force", "Overwrite output file if it already exists (default: refuse)")
   .action(async (sessionId, opts) => {
     const sessions = discoverSessions({
       agent: opts.agent,
@@ -281,11 +282,10 @@ program
         );
         process.exit(4);
       }
-      // If a regular file is already there, we also refuse (M2 overwrite
-      // protection without a --force flag).
-      if (existing.isFile()) {
+      // If a regular file is already there, refuse unless --force was passed.
+      if (existing.isFile() && !opts.force) {
         console.error(
-          `✗ Output file already exists: ${resolvedFile}\n  Remove it or pick a different --output and retry.`
+          `✗ Output file already exists: ${resolvedFile}\n  Use --force to overwrite or pick a different --output.`
         );
         process.exit(4);
       }
@@ -299,7 +299,7 @@ program
     }
 
     try {
-      writeFileSync(resolvedFile, skill, { flag: "wx" });
+      writeFileSync(resolvedFile, skill, { flag: opts.force ? "w" : "wx" });
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException;
       if (e?.code === "EEXIST") {
