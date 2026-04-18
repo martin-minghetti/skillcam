@@ -66,54 +66,17 @@ SkillCam reads an agent session from disk, extracts what worked, and writes a `S
 
 ### The loop it creates
 
-```mermaid
-flowchart LR
-    A["🧠 Agent solves<br/>a new problem<br/><sub>15 min · 50k tokens</sub>"] --> B[("📄 session.jsonl")]
-    B -->|skillcam distill| C["✨ SKILL.md"]
-    C --> D["⚡ Agent reuses<br/>the skill<br/><sub>3 min · 8k tokens</sub>"]
-    D -.->|next problem| A
-
-    style A fill:#1e3a8a,stroke:#1e40af,color:#fff
-    style B fill:#374151,stroke:#4b5563,color:#fff
-    style C fill:#16a34a,stroke:#15803d,color:#fff
-    style D fill:#7c2d12,stroke:#9a3412,color:#fff
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/loop.png" alt="The loop: agent solves → session.jsonl → skillcam distill → SKILL.md → agent reuses" width="900">
+</p>
 
 One session becomes one skill. One skill turns the next run from a fresh discovery into a quick execution.
 
 ### The pipeline
 
-```mermaid
-flowchart TD
-    IN[("~/.claude/projects/*.jsonl<br/>~/.codex/sessions/*.jsonl")]
-
-    subgraph SC[" "]
-        direction TB
-        S1["<b>1. Discover</b><br/><sub>scan session dirs<br/>sort by recency</sub>"]
-        S2["<b>2. Parse</b><br/><sub>messages, tool calls,<br/>files, tokens</sub>"]
-        S3{"<b>3. Distill</b><br/><sub>how to distill?</sub>"}
-        LLM["<b>LLM mode</b><br/><sub>Claude or GPT<br/>narrative skill</sub>"]
-        TMP["<b>Template mode</b><br/><sub>tool calls → steps<br/>no API call</sub>"]
-        S4["<b>4. Emit</b><br/><sub>append to<br/>events.jsonl</sub>"]
-    end
-
-    OUT["📄 <b>SKILL.md</b>"]
-
-    IN --> S1 --> S2 --> S3
-    S3 -->|default| LLM
-    S3 -->|--no-llm<br/>or fallback| TMP
-    LLM --> S4
-    TMP --> S4
-    S4 --> OUT
-
-    style S1 fill:#1e40af,stroke:#1d4ed8,color:#fff
-    style S2 fill:#1e40af,stroke:#1d4ed8,color:#fff
-    style S3 fill:#b45309,stroke:#a16207,color:#fff
-    style LLM fill:#15803d,stroke:#166534,color:#fff
-    style TMP fill:#6b21a8,stroke:#581c87,color:#fff
-    style S4 fill:#1e40af,stroke:#1d4ed8,color:#fff
-    style OUT fill:#047857,stroke:#065f46,color:#fff
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/pipeline.png" alt="Pipeline: discover → parse → distill (LLM or template) → emit → SKILL.md" width="500">
+</p>
 
 ### Two distill modes
 
@@ -264,21 +227,9 @@ The code is grouped by role. Each layer has one job.
 
 ### Data flow
 
-```mermaid
-flowchart LR
-    CLI["CLI"] --> DISC["Discovery"]
-    DISC --> PARSE["Parsers"]
-    PARSE --> DIST["Distiller"]
-    DIST --> OUT["SKILL.md"]
-    DIST --> EV["Events log"]
-
-    style CLI fill:#b45309,stroke:#a16207,color:#fff
-    style DISC fill:#1e40af,stroke:#1d4ed8,color:#fff
-    style PARSE fill:#6b21a8,stroke:#581c87,color:#fff
-    style DIST fill:#15803d,stroke:#166534,color:#fff
-    style OUT fill:#047857,stroke:#065f46,color:#fff
-    style EV fill:#be123c,stroke:#9f1239,color:#fff
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/data-flow.png" alt="Data flow: CLI → Discovery → Parsers → Distiller → SKILL.md + Events log" width="900">
+</p>
 
 ### Files by layer
 
