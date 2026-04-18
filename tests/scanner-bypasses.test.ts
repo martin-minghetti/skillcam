@@ -228,5 +228,49 @@ describe("Sprint 2 — scanner bypass hardening (audit C2)", () => {
         matches.filter((m) => m.type.startsWith("base64-encoded-")).length
       ).toBe(0);
     });
+
+    describe("S3 — recursive base64 decode", () => {
+      it("detects a double-base64 encoded anthropic key", () => {
+        const once = Buffer.from(anthropicKeyRaw).toString("base64");
+        const twice = Buffer.from(once).toString("base64");
+        const { matches } = scanAndRedact(`blob=${twice}`);
+        expect(
+          matches.some((m) =>
+            m.type.startsWith("base64-encoded-anthropic-api-key")
+          )
+        ).toBe(true);
+      });
+
+      it("detects a triple-base64 encoded openai project key", () => {
+        const once = Buffer.from(openaiProjectKeyRaw).toString("base64");
+        const twice = Buffer.from(once).toString("base64");
+        const thrice = Buffer.from(twice).toString("base64");
+        const { matches } = scanAndRedact(`x=${thrice}`);
+        expect(
+          matches.some((m) =>
+            m.type.startsWith("base64-encoded-openai-project-key")
+          )
+        ).toBe(true);
+      });
+
+      it("stops at depth 3 without exploding on deep base64 chains", () => {
+        // 6 layers of base64 around a key — only the first 3 should be
+        // attempted. No match for the inner key (that's fine), but also no
+        // crash / timeout.
+        let payload: string = anthropicKeyRaw;
+        for (let i = 0; i < 6; i++) {
+          payload = Buffer.from(payload).toString("base64");
+        }
+        const start = Date.now();
+        const { matches } = scanAndRedact(`y=${payload}`);
+        expect(Date.now() - start).toBeLessThan(200);
+        // The inner anthropic key is 6 levels deep — beyond MAX_DEPTH.
+        expect(
+          matches.every(
+            (m) => !m.type.includes("anthropic-api-key") || m.type.startsWith("base64-encoded-")
+          )
+        ).toBe(true);
+      });
+    });
   });
 });

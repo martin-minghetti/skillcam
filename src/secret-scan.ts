@@ -116,18 +116,33 @@ export function normalizeForScan(text: string): string {
 }
 
 /**
- * Bonus — base64 heuristic (Sprint 2, audit C2 "nice-to-have").
+ * Bonus — base64 heuristic (Sprint 2, audit C2 "nice-to-have") + recursive
+ * decode (audit #2 S3).
  *
- * Looks for suspiciously long base64-ish substrings, attempts `atob`, and
+ * Looks for suspiciously long base64-ish substrings, attempts decode, and
  * re-scans the decoded payload with every pattern. Matches get a synthetic
  * type prefix (`base64-encoded-<original-type>`) so consumers can distinguish
  * them from direct matches.
+ *
+ * S3 — recursive decode up to depth 3: an attacker can wrap a secret in
+ * `base64(base64(sk-ant-…))` so the first decode returns another printable
+ * base64 string, which the scanner's first-pass pattern match would miss.
+ * After each successful decode we check if the result is itself a lone
+ * base64-shaped string and, if so, recurse. Capped at depth 3 to bound
+ * CPU on adversarial nested input.
  *
  * Trade-off: base64 is a common format for legitimate binary payloads (image
  * data-urls, cached JSON blobs, etc.), so false positives are possible. We
  * require min length 40 + length divisible by 4 to keep the noise manageable.
  */
-function scanBase64Candidates(normalized: string, location: string): SecretMatch[] {
+const MAX_BASE64_DEPTH = 3;
+
+function scanBase64Candidates(
+  normalized: string,
+  location: string,
+  depth: number = 0
+): SecretMatch[] {
+  if (depth >= MAX_BASE64_DEPTH) return [];
   const hits: SecretMatch[] = [];
   // match base64-alphabet runs of 40+ chars. We accept URL-safe variants too.
   // `=` is only allowed as trailing padding (at most 2) — otherwise it would
@@ -152,15 +167,26 @@ function scanBase64Candidates(normalized: string, location: string): SecretMatch
     const printable = decoded.replace(/[^\x20-\x7e]/g, "").length;
     if (printable / Math.max(decoded.length, 1) < 0.9) continue;
     // Now run the standard patterns over the decoded payload.
+    const depthSuffix = depth > 0 ? `@depth-${depth + 1}` : "";
     for (const { type, regex } of PATTERNS) {
       const re = new RegExp(regex.source, regex.flags);
       for (const inner of decoded.matchAll(re)) {
         hits.push({
-          type: `base64-encoded-${type}`,
+          type: `base64-encoded-${type}${depthSuffix}`,
           snippet: redactValue(inner[0]),
           location,
         });
       }
+    }
+    // S3 — recurse if the decoded payload is itself a single base64-shaped
+    // token. We don't recurse on arbitrary text because that would turn every
+    // long-printable-string into a scan target and explode false positives.
+    const trimmed = decoded.trim();
+    if (
+      trimmed.length >= 40 &&
+      /^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)
+    ) {
+      hits.push(...scanBase64Candidates(trimmed, location, depth + 1));
     }
   }
   return hits;
