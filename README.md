@@ -13,6 +13,7 @@
   <a href="https://www.npmjs.com/package/skillcam"><img src="https://img.shields.io/npm/v/skillcam.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.npmjs.com/package/skillcam"><img src="https://img.shields.io/npm/dm/skillcam.svg" alt="npm downloads"></a>
+  <a href="https://www.npmjs.com/package/skillcam"><img src="https://img.shields.io/badge/sigstore-provenance-9d4edd?logo=sigstore&logoColor=white" alt="Sigstore provenance"></a>
 </p>
 
 ---
@@ -94,7 +95,18 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 
 ## Security
 
-Agent sessions often contain secrets (API keys, tokens, private file contents). In LLM mode, SkillCam scans the distillation prompt for common secret patterns before sending it to the provider. If any are found, it aborts by default. You can redact and continue with `--redact`, bypass with `--allow-secrets`, or stay fully local with `--no-llm`. Full threat model and reporting instructions in [`SECURITY.md`](SECURITY.md).
+Agent sessions often carry secrets (API keys, tokens, private file contents) and can themselves be hostile if anything else writes to `~/.claude/projects` or `~/.codex/sessions`. SkillCam treats every session as untrusted input.
+
+What runs on every distill:
+
+- **Secret scanner** — 14 patterns (Anthropic / OpenAI / GitHub / AWS / Stripe / Slack / JWT / PEM / generic), normalized against 7 bypass classes (NFKC, zero-width, URL-encode, Unicode escape, homoglyphs, combining marks, recursive base64 to depth 3). Aborts by default; `--redact` to continue, `--allow-secrets` to override, `--no-llm` to stay fully local.
+- **SKILL.md output sanitizer** — strips Unicode directional overrides, HTML comments, nested code fences, and unknown frontmatter keys before the file hits disk. Stops one agent's session from carrying a prompt-injection payload to the next agent that reads the skill.
+- **Filesystem hardening** — trust-root confinement, symlink rejection on read, atomic writes with `O_EXCL`, path-traversal guards on the LLM-controlled filename.
+- **Cost & DoS guards** — 50 MB session size cap, 1 MB per-line cap, 1000-message prompt cap (bounds worst-case cost at ~$0.75/distill), 100 KB skill output cap, LLM call timeout.
+- **Terminal injection guards** — control chars stripped from session-derived output in `preview` and `distill`.
+- **Supply chain** — published from CI via npm Trusted Publishing (OIDC) with Sigstore provenance, no long-lived tokens.
+
+Two deep audits are public in the project notes. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
 
 ## Installation
 
@@ -241,11 +253,17 @@ The code is grouped by role. Each layer has one job.
 |  | `src/parsers/codex.ts` | Parses Codex CLI JSONL format |
 |  | `src/parsers/types.ts` | `ParsedSession` shared shape |
 | **Distiller** | `src/distiller.ts` | Orchestrates LLM vs template mode |
-|  | `src/distiller-prompt.ts` | Builds the LLM prompt |
+|  | `src/distiller-prompt.ts` | Builds the LLM prompt (with billing cap) |
+| **Safety** | `src/secret-scan.ts` | Scanner — 14 patterns + bypass-class normalization |
+|  | `src/skill-schema.ts` | Output sanitizer — strips prompt-injection payloads from SKILL.md |
+|  | `src/path-safety.ts` | Filename sanitization + path-traversal guard |
+|  | `src/terminal-safety.ts` | Strips control chars from session fields before console output |
+|  | `src/limits.ts` | DoS / cost caps (session size, prompt messages, skill output) |
 | **Events** | `src/events/emit.ts` | Appends structured events to `events.jsonl` |
 |  | `src/events/types.ts` | `AgentEvent` schema |
+| **Update check** | `src/update-check.ts` | Once-per-day npm registry check, atomic + sandboxed |
 | **Examples** | `examples/skills/` | Real skills generated from sessions |
-| **Tests** | `tests/` | Vitest suite |
+| **Tests** | `tests/` | Vitest suite (122 tests across 14 files) |
 
 ## Contributing
 
