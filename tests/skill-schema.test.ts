@@ -126,6 +126,16 @@ describe("sanitizeSkillOutput (PI1)", () => {
       const out = sanitizeSkillOutput(attack);
       expect(out.skill).not.toContain("<!--");
     });
+
+    it("handles replacement-introduces-pattern edge case (`<!<!----`)", () => {
+      // The classic CodeQL multi-char-sanitization hazard: a naive one-shot
+      // replace of `<!--` on `<!<!----` yields `<!--`. The loop must catch
+      // the re-introduced delimiter.
+      const attack = validSkill + "\n\n<!<!----\n";
+      const out = sanitizeSkillOutput(attack);
+      expect(out.skill).not.toContain("<!--");
+      expect(out.skill).not.toContain("-->");
+    });
   });
 
   describe("nested code fences", () => {

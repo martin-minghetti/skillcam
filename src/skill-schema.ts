@@ -84,10 +84,24 @@ export function sanitizeSkillOutput(skill: string): SanitizeSkillResult {
     if (next === out) break;
     out = next;
   }
-  const loneDelims = out.match(HTML_COMMENT_TOKEN_RE);
-  if (loneDelims) {
+  // A single `.replace` can re-introduce a delimiter: the string `<!<!----`
+  // contains `<!--` at position 2, removing it yields `<!` + `--` = `<!--`
+  // again. Loop until the string is provably delimiter-free — CodeQL's
+  // `js/incomplete-multi-char-sanitization` rule recognizes this pattern as
+  // safe, whereas a one-shot replace it flags.
+  while (
+    out.includes("<!--") ||
+    out.includes("-->") ||
+    out.includes("--!>")
+  ) {
+    const before = out;
+    const delimsBefore = before.match(HTML_COMMENT_TOKEN_RE);
     out = out.replace(HTML_COMMENT_TOKEN_RE, "");
-    commentsStripped += loneDelims.length;
+    if (delimsBefore) commentsStripped += delimsBefore.length;
+    // Defensive: if the replace produced no change (shouldn't happen because
+    // the includes() check already confirmed at least one delim is present)
+    // break to avoid an infinite loop.
+    if (out === before) break;
   }
   if (commentsStripped > 0) {
     violations.push(
