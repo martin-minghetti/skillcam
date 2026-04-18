@@ -92,6 +92,22 @@ You should receive a response within a few days. Please include:
 - The version of SkillCam you tested
 - Any suggested mitigations
 
+## Supply chain
+
+SkillCam takes several precautions to protect the build and release pipeline:
+
+- **Trusted publishing + provenance.** Releases to npm are published from GitHub Actions using [npm trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers/). Each release carries a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) linking the published tarball to the exact source commit and workflow run. You can verify a locally installed copy with:
+
+  ```sh
+  npm audit signatures
+  ```
+
+- **No install scripts.** The repository-level `.npmrc` sets `ignore-scripts=true`, and CI installs with `npm ci --ignore-scripts`, so dependencies cannot execute arbitrary code during `npm install`.
+
+- **Automated monitoring.** Dependabot watches npm and GitHub Actions dependencies weekly, and [CodeQL](https://codeql.github.com/) runs on every push and pull request against `main`. Vulnerability alerts, private vulnerability reporting, and secret scanning with validity checks are enabled on the repository.
+
+- **Protected main branch.** Merges to `main` require pull requests, linear history, signed commits, and passing `test` and `CodeQL` status checks. Force-pushes and deletions of `main` are blocked.
+
 ## Supported versions
 
 SkillCam is in early alpha (0.x). Only the latest published version receives security fixes.
