@@ -1,0 +1,13 @@
+flowchart LR
+    CLI["CLI"] --> DISC["Discovery"]
+    DISC --> PARSE["Parsers"]
+    PARSE --> DIST["Distiller"]
+    DIST --> OUT["SKILL.md"]
+    DIST --> EV["Events log"]
+
+    style CLI fill:#b45309,stroke:#a16207,color:#fff
+    style DISC fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style PARSE fill:#6b21a8,stroke:#581c87,color:#fff
+    style DIST fill:#15803d,stroke:#166534,color:#fff
+    style OUT fill:#047857,stroke:#065f46,color:#fff
+    style EV fill:#be123c,stroke:#9f1239,color:#fff
