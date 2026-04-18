@@ -32,8 +32,14 @@ const ALLOWED_FRONTMATTER_KEYS = new Set([
 // variants). None has a legitimate use in a skill markdown file.
 const DIRECTIONAL_RE = /[\u202A-\u202E\u2066-\u2069]/g;
 
-// HTML comments. Greedy/multiline to catch payloads that span lines.
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+// HTML comment full-block match. Per the HTML5 spec, a comment ends on
+// either `-->` or `--!>` (the legacy abrupt-closing form). CodeQL's
+// `js/bad-html-filtering-regexp` rule specifically requires both be handled.
+const HTML_COMMENT_BLOCK_RE = /<!--[\s\S]*?--!?>/g;
+
+// Any stray comment delimiter — open or close, including the legacy `--!>`
+// form. Used as a final cleanup pass after the block-match loop.
+const HTML_COMMENT_TOKEN_RE = /<!--|--!?>/g;
 
 // Lines starting with 4 or more backticks — these wrap code blocks beyond
 // what a legitimate markdown skill would ever need, and are the common vector
@@ -58,29 +64,34 @@ export function sanitizeSkillOutput(skill: string): SanitizeSkillResult {
     );
   }
 
-  // 2. Strip HTML comments. A single regex pass is insufficient because
-  // nested / overlapping payloads like `<!-<!--DELETEME-->- evil -->` leave
-  // a surviving `<!-- evil -->` after the inner match is removed. Loop to a
-  // fixed point, then strip any lone `<!--` / `-->` delimiters so malformed
-  // or unclosed comments can't smuggle instructions either.
+  // 2. Strip HTML comments.
+  //
+  // Two passes:
+  //   (a) Remove complete comment BLOCKS (body included), looping to a fixed
+  //       point. This defeats nested-payload bypass like
+  //       `<!-<!--DELETEME-->- evil -->` where the first match surfaces a
+  //       valid comment; the loop's next iteration removes that too.
+  //       Both close forms `-->` and `--!>` are matched (CodeQL
+  //       js/bad-html-filtering-regexp).
+  //   (b) Strip any surviving lone delimiters so an unclosed `<!--` at EOF
+  //       or a stray `-->` can't smuggle semantics to a downstream LLM.
   let commentsStripped = 0;
   while (true) {
-    const matches = out.match(HTML_COMMENT_RE);
+    const matches = out.match(HTML_COMMENT_BLOCK_RE);
     if (!matches) break;
     commentsStripped += matches.length;
-    const next = out.replace(HTML_COMMENT_RE, "");
+    const next = out.replace(HTML_COMMENT_BLOCK_RE, "");
     if (next === out) break;
     out = next;
   }
-  const LONE_COMMENT_DELIM_RE = /<!--|-->/g;
-  const loneDelims = out.match(LONE_COMMENT_DELIM_RE);
+  const loneDelims = out.match(HTML_COMMENT_TOKEN_RE);
   if (loneDelims) {
-    out = out.replace(LONE_COMMENT_DELIM_RE, "");
+    out = out.replace(HTML_COMMENT_TOKEN_RE, "");
     commentsStripped += loneDelims.length;
   }
   if (commentsStripped > 0) {
     violations.push(
-      `stripped ${commentsStripped} HTML comment block(s)/delimiter(s)`
+      `stripped ${commentsStripped} HTML comment(s)/delimiter(s)`
     );
   }
 
