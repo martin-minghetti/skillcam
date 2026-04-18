@@ -135,19 +135,30 @@ async function llmDistill(
   secretPolicy: SecretPolicy,
   onSecretsDetected?: (matches: SecretMatch[]) => void
 ): Promise<string> {
-  const rawPrompt = buildDistillPrompt(session);
-  const { matches, redacted } = scanAndRedact(rawPrompt, "distill-prompt");
+  // Sprint 2 / audit C2 B1: buildDistillPrompt now returns the per-field
+  // scan matches (collected BEFORE truncation) alongside the prompt. We still
+  // run a final scanAndRedact over the composed prompt as defense-in-depth
+  // for session metadata (project, filesModified, sessionId, tool names...)
+  // that does not flow through the per-field scanner.
+  const { prompt: builtPrompt, matches: builtMatches } = buildDistillPrompt(session);
+  const { matches: outerMatches, redacted: outerRedacted } = scanAndRedact(
+    builtPrompt,
+    "distill-prompt"
+  );
+  const matches: SecretMatch[] = [...builtMatches, ...outerMatches];
 
-  let prompt = rawPrompt;
+  let prompt = builtPrompt;
   if (matches.length > 0) {
     onSecretsDetected?.(matches);
     if (secretPolicy === "abort") {
       throw new SecretsDetectedError(matches);
     }
     if (secretPolicy === "redact") {
-      prompt = redacted;
+      // outerRedacted contains both the per-field redactions (already baked
+      // into builtPrompt) plus any extra redactions from the outer pass.
+      prompt = outerRedacted;
     }
-    // "allow" falls through and sends rawPrompt as-is
+    // "allow" falls through and sends builtPrompt as-is
   }
 
   try {
