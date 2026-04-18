@@ -5,7 +5,8 @@ import { join } from "path";
 import { discoverSessions } from "./discovery.js";
 import { parseClaudeCodeSession } from "./parsers/claude-code.js";
 import { parseCodexSession } from "./parsers/codex.js";
-import { distillSkill } from "./distiller.js";
+import { distillSkill, SecretsDetectedError, type SecretPolicy } from "./distiller.js";
+import { summarize } from "./secret-scan.js";
 import { emitEvent } from "./events/emit.js";
 import type { ParsedSession } from "./parsers/types.js";
 
@@ -98,6 +99,8 @@ program
   .option("--no-llm", "Use template extraction only (no API call)")
   .option("--provider <provider>", "LLM provider (anthropic, openai)", "anthropic")
   .option("--model <model>", "LLM model to use")
+  .option("--redact", "Redact detected secrets before sending to the LLM")
+  .option("--allow-secrets", "Send session as-is even if secrets are detected (not recommended)")
   .action(async (sessionId, opts) => {
     const sessions = discoverSessions({
       agent: opts.agent,
@@ -122,17 +125,42 @@ program
     );
 
     const useLlm = opts.llm !== false;
+    const secretPolicy: SecretPolicy = opts.allowSecrets
+      ? "allow"
+      : opts.redact
+        ? "redact"
+        : "abort";
+
     console.log(
       useLlm
         ? `✓ Distilling with ${opts.provider}...`
         : `✓ Distilling with template mode (no LLM)...`
     );
 
-    const skill = await distillSkill(parsed, {
-      useLlm,
-      provider: opts.provider,
-      model: opts.model,
-    });
+    let skill: string;
+    try {
+      skill = await distillSkill(parsed, {
+        useLlm,
+        provider: opts.provider,
+        model: opts.model,
+        secretPolicy,
+        onSecretsDetected: (matches) => {
+          if (secretPolicy === "redact") {
+            console.warn(`\n⚠ Detected ${matches.length} potential secret(s), redacting before LLM call:`);
+            console.warn(summarize(matches));
+          } else if (secretPolicy === "allow") {
+            console.warn(`\n⚠ Detected ${matches.length} potential secret(s), sending as-is (--allow-secrets):`);
+            console.warn(summarize(matches));
+          }
+        },
+      });
+    } catch (err) {
+      if (err instanceof SecretsDetectedError) {
+        console.error(`\n✗ ${err.message}\n`);
+        process.exit(2);
+      }
+      throw err;
+    }
 
     // Extract name from generated skill
     const nameMatch = skill.match(/^name:\s*(.+)$/m);

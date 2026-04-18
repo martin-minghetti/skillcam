@@ -1,10 +1,24 @@
 import type { ParsedSession } from "./parsers/types.js";
 import { buildDistillPrompt } from "./distiller-prompt.js";
+import { scanAndRedact, summarize, type SecretMatch } from "./secret-scan.js";
+
+export type SecretPolicy = "abort" | "redact" | "allow";
 
 interface DistillOptions {
   useLlm?: boolean;
   provider?: "anthropic" | "openai";
   model?: string;
+  secretPolicy?: SecretPolicy;
+  onSecretsDetected?: (matches: SecretMatch[]) => void;
+}
+
+export class SecretsDetectedError extends Error {
+  constructor(public matches: SecretMatch[]) {
+    super(
+      `Found ${matches.length} potential secret(s) in session. Run with --redact to redact and continue, --no-llm to stay local, or --allow-secrets to send as-is (not recommended).\n${summarize(matches)}`
+    );
+    this.name = "SecretsDetectedError";
+  }
 }
 
 function templateDistill(session: ParsedSession): string {
@@ -63,9 +77,24 @@ Total tool calls: ${session.totalToolCalls}
 async function llmDistill(
   session: ParsedSession,
   provider: "anthropic" | "openai",
-  model: string
+  model: string,
+  secretPolicy: SecretPolicy,
+  onSecretsDetected?: (matches: SecretMatch[]) => void
 ): Promise<string> {
-  const prompt = buildDistillPrompt(session);
+  const rawPrompt = buildDistillPrompt(session);
+  const { matches, redacted } = scanAndRedact(rawPrompt, "distill-prompt");
+
+  let prompt = rawPrompt;
+  if (matches.length > 0) {
+    onSecretsDetected?.(matches);
+    if (secretPolicy === "abort") {
+      throw new SecretsDetectedError(matches);
+    }
+    if (secretPolicy === "redact") {
+      prompt = redacted;
+    }
+    // "allow" falls through and sends rawPrompt as-is
+  }
 
   try {
     if (provider === "anthropic") {
@@ -97,6 +126,9 @@ async function llmDistill(
       return response.choices[0]?.message?.content ?? templateDistill(session);
     }
   } catch (err) {
+    if (err instanceof SecretsDetectedError) {
+      throw err;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`\n✗ LLM distillation failed: ${msg}`);
     console.error("  Falling back to template mode.\n");
@@ -114,11 +146,13 @@ export async function distillSkill(
     useLlm = true,
     provider = "anthropic",
     model = provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o",
+    secretPolicy = "abort",
+    onSecretsDetected,
   } = options;
 
   if (!useLlm) {
     return templateDistill(session);
   }
 
-  return llmDistill(session, provider, model);
+  return llmDistill(session, provider, model, secretPolicy, onSecretsDetected);
 }

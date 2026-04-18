@@ -1,6 +1,6 @@
 {
   "name": "skillcam",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
@@ -9,7 +9,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "SECURITY.md"
   ],
   "scripts": {
     "build": "tsc",
@@ -27,13 +28,13 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
-    "@types/node": "^25.6.0",
     "commander": "^14.0.3",
-    "openai": "^6.34.0",
-    "typescript": "^6.0.2"
+    "openai": "^6.34.0"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
     "vitest": "^4.1.4"
   }
 }

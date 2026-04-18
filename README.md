@@ -129,6 +129,10 @@ flowchart TD
 - **Distill** — converts the parsed session into a reusable skill via either mode above.
 - **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
 
+## Security
+
+Agent sessions often contain secrets (API keys, tokens, private file contents). In LLM mode, SkillCam scans the distillation prompt for common secret patterns before sending it to the provider. If any are found, it aborts by default. You can redact and continue with `--redact`, bypass with `--allow-secrets`, or stay fully local with `--no-llm`. Full threat model and reporting instructions in [`SECURITY.md`](SECURITY.md).
+
 ## Installation
 
 ```bash
@@ -170,10 +174,14 @@ Distill a session into a reusable SKILL.md.
 skillcam distill --latest                              # Distill most recent session
 skillcam distill <session-id>                          # Distill specific session
 skillcam distill --latest --no-llm                     # Template mode (no API key needed)
-skillcam distill --latest --provider anthropic          # Use Claude for distillation
+skillcam distill --latest --provider anthropic         # Use Claude for distillation
 skillcam distill --latest --provider openai --model gpt-4o  # Use GPT-4o
 skillcam distill --latest --output ./my-skills/        # Custom output directory
+skillcam distill --latest --redact                     # Redact detected secrets before sending
+skillcam distill --latest --allow-secrets              # Send as-is even if secrets are detected
 ```
+
+By default, `distill` scans the prompt for common secret patterns (API keys, tokens, private keys) and aborts if any are found. See [`SECURITY.md`](SECURITY.md).
 
 ## Supported Agents
 
