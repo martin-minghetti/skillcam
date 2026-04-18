@@ -1,6 +1,7 @@
 import { basename, relative, isAbsolute } from "path";
 import type { ParsedSession } from "./parsers/types.js";
 import { scanAndRedactTruncate, type SecretMatch } from "./secret-scan.js";
+import { capPromptMessages } from "./limits.js";
 
 /**
  * Sprint 4 — trim absolute paths out of prompt metadata. The LLM still gets
@@ -24,6 +25,7 @@ function stripPath(p: string, projectRoot: string): string {
 export interface BuildDistillPromptResult {
   prompt: string;
   matches: SecretMatch[];
+  truncatedMessageCount: number;
 }
 
 /**
@@ -43,7 +45,14 @@ export interface BuildDistillPromptResult {
 export function buildDistillPrompt(session: ParsedSession): BuildDistillPromptResult {
   const matches: SecretMatch[] = [];
 
-  const toolSummary = session.messages
+  // B1 — cap the number of messages we feed the LLM. A hostile or
+  // accidentally-huge session (50MB JSONL ≈ 175k messages) would otherwise
+  // produce a ~21M-token prompt and bill the user ~$65 per distill on
+  // Sonnet 4.6. Keep the most recent N — the productive end of a session
+  // is where the reusable pattern lives.
+  const { messages, truncatedCount } = capPromptMessages(session.messages);
+
+  const toolSummary = messages
     .flatMap((m, mi) =>
       m.toolCalls.map((tc, ti) => {
         const raw = `- ${tc.name}: ${JSON.stringify(tc.input)}`;
@@ -58,7 +67,7 @@ export function buildDistillPrompt(session: ParsedSession): BuildDistillPromptRe
     )
     .join("\n");
 
-  const conversation = session.messages
+  const conversation = messages
     .map((m, mi) => {
       const scanned = scanAndRedactTruncate(m.content, 500, `message[${mi}]`);
       matches.push(...scanned.matches);
@@ -129,5 +138,5 @@ Rules:
 - The skill should be usable by someone who never saw the original session
 - Keep it under 100 lines`;
 
-  return { prompt, matches };
+  return { prompt, matches, truncatedMessageCount: truncatedCount };
 }
