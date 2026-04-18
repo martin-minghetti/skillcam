@@ -1,5 +1,19 @@
-import { describe, it, expect } from "vitest";
-import { isNewer } from "../src/update-check.js";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isNewer, readCache, writeCache } from "../src/update-check.js";
 
 describe("isNewer", () => {
   it("reports newer patch version", () => {
@@ -29,5 +43,99 @@ describe("isNewer", () => {
   it("returns false on malformed versions", () => {
     expect(isNewer("not-a-version", "0.2.0")).toBe(false);
     expect(isNewer("0.2.0", "garbage")).toBe(false);
+  });
+});
+
+describe("writeCache (U1, U4 — atomic write + chmod)", () => {
+  let tmp: string;
+  let cacheDir: string;
+  let cacheFile: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "skillcam-cache-"));
+    cacheDir = join(tmp, "cache");
+    cacheFile = join(cacheDir, "update-check.json");
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("writes a fresh cache file with 0o600 perms", () => {
+    writeCache({ latest: "1.2.3", checkedAt: 1700000000000 }, cacheFile, cacheDir);
+    expect(existsSync(cacheFile)).toBe(true);
+    const data = JSON.parse(readFileSync(cacheFile, "utf-8"));
+    expect(data.latest).toBe("1.2.3");
+    expect(data.checkedAt).toBe(1700000000000);
+    // mode: lower 9 bits should be 0o600 on POSIX. Skip check on Windows.
+    if (process.platform !== "win32") {
+      const mode = statSync(cacheFile).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
+  });
+
+  it("U4 — enforces 0o700 on the cache dir even if it pre-existed laxer", () => {
+    if (process.platform === "win32") return;
+    mkdirSync(cacheDir, { recursive: true, mode: 0o777 });
+    writeCache({ latest: "1.2.3", checkedAt: 1 }, cacheFile, cacheDir);
+    const mode = statSync(cacheDir).mode & 0o777;
+    expect(mode).toBe(0o700);
+  });
+
+  it("U1 — replaces a symlink at cache path without writing through it", () => {
+    if (process.platform === "win32") return;
+    mkdirSync(cacheDir, { recursive: true });
+    // Plant the attack: cache file is a symlink to a target outside the dir.
+    const target = join(tmp, "ATTACKER_TARGET");
+    writeFileSync(target, "DO NOT OVERWRITE\n");
+    symlinkSync(target, cacheFile);
+    expect(lstatSync(cacheFile).isSymbolicLink()).toBe(true);
+
+    writeCache({ latest: "9.9.9", checkedAt: 42 }, cacheFile, cacheDir);
+
+    // Cache file should now be a regular file with our payload.
+    expect(lstatSync(cacheFile).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(readFileSync(cacheFile, "utf-8")).latest).toBe("9.9.9");
+    // The symlink target must be untouched.
+    expect(readFileSync(target, "utf-8")).toBe("DO NOT OVERWRITE\n");
+  });
+
+  it("U1 — leaves no .tmp leftover after a successful write", () => {
+    writeCache({ latest: "1.2.3", checkedAt: 1 }, cacheFile, cacheDir);
+    const leftovers = readdirSync(cacheDir).filter((f) => f.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
+});
+
+describe("readCache", () => {
+  let tmp: string;
+  let cacheFile: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "skillcam-read-"));
+    cacheFile = join(tmp, "update-check.json");
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("returns null when file does not exist", () => {
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("returns null on malformed JSON", () => {
+    writeFileSync(cacheFile, "{not json");
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("returns parsed entry on a valid cache file", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({ latest: "0.2.3", checkedAt: 12345 })
+    );
+    const out = readCache(cacheFile);
+    expect(out?.latest).toBe("0.2.3");
+    expect(out?.checkedAt).toBe(12345);
   });
 });

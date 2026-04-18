@@ -1,4 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -43,9 +50,12 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-function readCache(): CacheEntry | null {
+/**
+ * Exported for tests. Production callers omit the path args.
+ */
+export function readCache(file: string = CACHE_FILE): CacheEntry | null {
   try {
-    const raw = readFileSync(CACHE_FILE, "utf-8");
+    const raw = readFileSync(file, "utf-8");
     const data = JSON.parse(raw) as unknown;
     if (
       typeof data === "object" &&
@@ -61,12 +71,46 @@ function readCache(): CacheEntry | null {
   return null;
 }
 
-function writeCache(entry: CacheEntry): void {
+/**
+ * Exported for tests. Production callers omit the path args.
+ */
+export function writeCache(
+  entry: CacheEntry,
+  file: string = CACHE_FILE,
+  dir: string = CACHE_DIR
+): void {
+  // U1 — write atomically via tmp + rename so a planted symlink at `file`
+  // never gets followed. With O_EXCL on the tmp file (`flag: "wx"`), even a
+  // TOCTOU race that pre-plants the tmp path fails. The final renameSync
+  // removes whatever was at `file` (regular file, symlink) without writing
+  // through it.
+  //
+  // U4 — mkdirSync only applies `mode` at creation. If `dir` already
+  // existed as 0o777 (e.g. another process created it), enforce 0o700 now.
+  let tmp: string | null = null;
   try {
-    mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
-    writeFileSync(CACHE_FILE, JSON.stringify(entry), { mode: 0o600 });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // best-effort: on platforms where chmod is a no-op (Windows), skip.
+    }
+    tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600, flag: "wx" });
+    renameSync(tmp, file);
+    tmp = null;
   } catch {
     // Cache is a best-effort optimization; losing it is harmless.
+  } finally {
+    // If rename failed but the tmp file landed on disk, clean it up so we
+    // don't pollute `dir` with leftovers.
+    if (tmp !== null) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 
