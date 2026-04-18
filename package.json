@@ -1,6 +1,6 @@
 {
   "name": "skillcam",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
