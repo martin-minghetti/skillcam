@@ -23,6 +23,7 @@ import {
   sanitizeForTerminal,
   sanitizeListForTerminal,
 } from "./terminal-safety.js";
+import { sanitizeSkillOutput } from "./skill-schema.js";
 import {
   MAX_SESSION_BYTES,
   isSessionSizeAllowed,
@@ -266,6 +267,18 @@ program
     if (truncated !== skill) {
       console.warn(`⚠ LLM output exceeded skill size cap, truncating.`);
       skill = truncated;
+    }
+
+    // PI1 — strip prompt-injection payloads the LLM may have embedded in the
+    // skill body (directional overrides, HTML comments, nested code fences,
+    // unknown frontmatter keys). Runs BEFORE filename extraction so the
+    // frontmatter `name:` we read below is already cleaned.
+    const sanitized = sanitizeSkillOutput(skill);
+    if (sanitized.violations.length > 0) {
+      console.warn(
+        `⚠ Sanitized skill output:\n  - ${sanitized.violations.join("\n  - ")}`
+      );
+      skill = sanitized.skill;
     }
 
     // C1 — sanitize the LLM-controlled filename
