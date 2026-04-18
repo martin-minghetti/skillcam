@@ -239,6 +239,25 @@ Agent: Reads test, finds mock mismatch, fixes setup, all tests pass.
 
 See [`examples/skills/`](examples/skills/) for real skills generated from actual sessions.
 
+## Works with Obsidian
+
+SkillCam is CLI-first and markdown-native — **Obsidian is not required**, but the output is designed to work well inside a vault.
+
+- **YAML frontmatter** is Obsidian-compatible: `name`, `description`, `tags`, `created` render in the Properties panel with no config.
+- **Skill files are plain markdown**. Drop them anywhere in your vault, link to them with wikilinks (`[[fix-auth-tests]]`), or pull them into a Dataview / Bases query by tag.
+- **No plugin to install**. The CLI writes markdown, Obsidian reads markdown. Same files work for agents, for humans, and for CI.
+
+Typical workflow:
+
+```bash
+# Distill the session straight into your vault
+skillcam distill --latest --output ~/Vault/skills/
+```
+
+Add `skills/` to a folder note or to a Base view and your agent skills become searchable alongside your research and daily notes.
+
+If you're an agent-tooling power user or vault-curator, please open an issue with workflows you'd want — a `--vault` flag that reads `$OBSIDIAN_VAULT` is on the roadmap.
+
 ## Project Structure
 
 The code is grouped by role. Each layer has one job.
