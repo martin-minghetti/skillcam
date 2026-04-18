@@ -62,46 +62,72 @@ After SkillCam:
 
 ## How It Works
 
-```
-  ~/.claude/projects/**/*.jsonl
-  ~/.codex/sessions/**/*.jsonl
-           │
-           ▼
-   ┌──────────────┐
-   │  1. Discover  │  Scan session dirs, sort by recency
-   └──────┬───────┘
-          │  session JSONL
-          ▼
-   ┌──────────────┐
-   │   2. Parse    │  Extract messages, tool calls, files, tokens
-   └──────┬───────┘
-          │  ParsedSession
-          ▼
-   ┌──────────────┐    ┌─────────────────────────────┐
-   │  3. Distill   │───▶│  LLM mode (default)         │
-   └──────┬───────┘    │  Sends conversation + tool   │
-          │            │  calls to Claude / GPT with   │
-          │            │  a distillation prompt         │
-          │            ├─────────────────────────────┤
-          │            │  Template mode (--no-llm)    │
-          │            │  Structured extraction, no   │
-          │            │  API key needed               │
-          │            └─────────────────────────────┘
-          ▼
-   ┌──────────────┐
-   │  4. Emit      │  Log event to events.jsonl
-   └──────┬───────┘
-          │
-          ▼
-      SKILL.md
+SkillCam reads an agent session from disk, extracts what worked, and writes a `SKILL.md` your agent can reuse next time.
+
+### The loop it creates
+
+```mermaid
+flowchart LR
+    A["🧠 Agent solves<br/>a new problem<br/><sub>15 min · 50k tokens</sub>"] --> B[("📄 session.jsonl")]
+    B -->|skillcam distill| C["✨ SKILL.md"]
+    C --> D["⚡ Agent reuses<br/>the skill<br/><sub>3 min · 8k tokens</sub>"]
+    D -.->|next problem| A
+
+    style A fill:#1e3a8a,stroke:#1e40af,color:#fff
+    style B fill:#374151,stroke:#4b5563,color:#fff
+    style C fill:#16a34a,stroke:#15803d,color:#fff
+    style D fill:#7c2d12,stroke:#9a3412,color:#fff
 ```
 
-| Stage | What it does | Key details |
-|-------|-------------|-------------|
-| **Discover** | Finds session logs on disk | Scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files, sorted by most recent first |
-| **Parse** | Reads the raw JSONL into a structured format | Extracts user/assistant messages, tool calls with inputs/outputs, files modified, token usage, and project metadata. Each agent format has its own parser |
-| **Distill** | Converts the parsed session into a reusable skill | **LLM mode** (default): sends the conversation and tool call summary to Claude or GPT with a distillation prompt. **Template mode** (`--no-llm`): extracts steps directly from tool calls without any API call. Falls back to template mode automatically if the LLM call fails |
-| **Emit** | Records the distillation for observability | Appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, and distill mode |
+One session becomes one skill. One skill turns the next run from a fresh discovery into a quick execution.
+
+### The pipeline
+
+```mermaid
+flowchart TD
+    IN[("~/.claude/projects/*.jsonl<br/>~/.codex/sessions/*.jsonl")]
+
+    subgraph SC[" "]
+        direction TB
+        S1["<b>1. Discover</b><br/><sub>scan session dirs<br/>sort by recency</sub>"]
+        S2["<b>2. Parse</b><br/><sub>messages, tool calls,<br/>files, tokens</sub>"]
+        S3{"<b>3. Distill</b><br/><sub>how to distill?</sub>"}
+        LLM["<b>LLM mode</b><br/><sub>Claude or GPT<br/>narrative skill</sub>"]
+        TMP["<b>Template mode</b><br/><sub>tool calls → steps<br/>no API call</sub>"]
+        S4["<b>4. Emit</b><br/><sub>append to<br/>events.jsonl</sub>"]
+    end
+
+    OUT["📄 <b>SKILL.md</b>"]
+
+    IN --> S1 --> S2 --> S3
+    S3 -->|default| LLM
+    S3 -->|--no-llm<br/>or fallback| TMP
+    LLM --> S4
+    TMP --> S4
+    S4 --> OUT
+
+    style S1 fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style S2 fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style S3 fill:#b45309,stroke:#a16207,color:#fff
+    style LLM fill:#15803d,stroke:#166534,color:#fff
+    style TMP fill:#6b21a8,stroke:#581c87,color:#fff
+    style S4 fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style OUT fill:#047857,stroke:#065f46,color:#fff
+```
+
+### Two distill modes
+
+| Mode | When to use | What happens |
+|------|-------------|--------------|
+| **LLM mode** (default) | You want polished, narrative skills | Sends a truncated view of the session to Claude or GPT with a distillation prompt. Produces clean "when to use", concrete steps, and summarized decisions. |
+| **Template mode** (`--no-llm`) | No API key, cost-sensitive, or sensitive session content | Extracts steps directly from tool calls. Deterministic, structured, zero network calls. SkillCam falls back here automatically if the LLM call fails. |
+
+### What each stage does
+
+- **Discover** — scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files. Each agent format has its own parser. Sessions are sorted by most recent first.
+- **Parse** — reads the raw JSONL into a typed shape: user/assistant messages, tool calls with inputs/outputs, files modified, token usage, project metadata.
+- **Distill** — converts the parsed session into a reusable skill via either mode above.
+- **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
 
 ## Installation
 
@@ -207,22 +233,71 @@ See [`examples/skills/`](examples/skills/) for real skills generated from actual
 
 ## Project Structure
 
+### Architecture
+
+```mermaid
+flowchart TB
+    CLI["<b>cli.ts</b><br/><sub>commander entry<br/>list · preview · distill</sub>"]
+
+    subgraph CORE["Core"]
+        direction LR
+        DISCOVERY["<b>discovery.ts</b><br/><sub>find sessions<br/>on disk</sub>"]
+        DISTILLER["<b>distiller.ts</b><br/><sub>orchestrate<br/>LLM vs template</sub>"]
+        PROMPT["<b>distiller-prompt.ts</b><br/><sub>build LLM prompt</sub>"]
+    end
+
+    subgraph PARSERS["parsers/"]
+        direction LR
+        CLAUDE["<b>claude-code.ts</b><br/><sub>Claude Code<br/>JSONL format</sub>"]
+        CODEX["<b>codex.ts</b><br/><sub>Codex CLI<br/>JSONL format</sub>"]
+        PTYPES["<b>types.ts</b><br/><sub>ParsedSession<br/>shared shape</sub>"]
+    end
+
+    subgraph EVENTS["events/"]
+        direction LR
+        EMIT["<b>emit.ts</b><br/><sub>append to<br/>events.jsonl</sub>"]
+        ETYPES["<b>types.ts</b><br/><sub>AgentEvent<br/>schema</sub>"]
+    end
+
+    CLI --> DISCOVERY
+    CLI --> PARSERS
+    CLI --> DISTILLER
+    CLI --> EMIT
+    DISTILLER --> PROMPT
+    PARSERS -.->|typed session| DISTILLER
+
+    style CLI fill:#b45309,stroke:#a16207,color:#fff
+    style DISCOVERY fill:#1e40af,stroke:#1d4ed8,color:#fff
+    style DISTILLER fill:#15803d,stroke:#166534,color:#fff
+    style PROMPT fill:#15803d,stroke:#166534,color:#fff
+    style CLAUDE fill:#6b21a8,stroke:#581c87,color:#fff
+    style CODEX fill:#6b21a8,stroke:#581c87,color:#fff
+    style PTYPES fill:#4c1d95,stroke:#3b0764,color:#fff
+    style EMIT fill:#be123c,stroke:#9f1239,color:#fff
+    style ETYPES fill:#9f1239,stroke:#881337,color:#fff
+    style CORE fill:#0f172a,stroke:#334155,color:#fff
+    style PARSERS fill:#0f172a,stroke:#334155,color:#fff
+    style EVENTS fill:#0f172a,stroke:#334155,color:#fff
+```
+
+### File tree
+
 ```
 skillcam/
 ├── src/
-│   ├── cli.ts              # CLI entry point (commander)
-│   ├── discovery.ts        # Session finder for Claude Code + Codex
-│   ├── distiller.ts        # LLM and template distillation
-│   ├── distiller-prompt.ts # Prompt for LLM distillation
+│   ├── cli.ts               ← CLI entry point (commander)
+│   ├── discovery.ts         ← finds session logs on disk
+│   ├── distiller.ts         ← LLM and template distillation
+│   ├── distiller-prompt.ts  ← prompt builder for LLM mode
 │   ├── parsers/
-│   │   ├── claude-code.ts  # Claude Code JSONL parser
-│   │   ├── codex.ts        # Codex CLI JSONL parser
-│   │   └── types.ts        # Shared parser types
+│   │   ├── claude-code.ts   ← Claude Code JSONL parser
+│   │   ├── codex.ts         ← Codex CLI JSONL parser
+│   │   └── types.ts         ← ParsedSession shared type
 │   └── events/
-│       ├── emit.ts         # Event emitter (JSONL append)
-│       └── types.ts        # Event schema types
-├── examples/skills/        # Example generated skills
-└── tests/                  # Vitest test suite
+│       ├── emit.ts          ← appends to events.jsonl
+│       └── types.ts         ← AgentEvent schema
+├── examples/skills/         ← real skills generated from sessions
+└── tests/                   ← Vitest suite
 ```
 
 ## Contributing
