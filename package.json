@@ -4,7 +4,7 @@
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
-    "skillcam": "./dist/cli.js"
+    "skillcam": "dist/cli.js"
   },
   "files": [
     "dist",
