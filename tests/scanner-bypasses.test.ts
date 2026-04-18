@@ -171,6 +171,43 @@ describe("Sprint 2 — scanner bypass hardening (audit C2)", () => {
     });
   });
 
+  describe("S1 — homoglyphs + combining diacritics", () => {
+    it("detects a Cyrillic-homoglyph Anthropic key (`ѕк-ant-…`)", () => {
+      // First two chars are Cyrillic ѕ (U+0455) and к (U+043A). Rest is ASCII
+      // so the full anthropic regex still has 20+ ASCII chars to match.
+      const payload =
+        "Authorization: \u0455\u043A" +
+        "-ant-api03-abc123def456ghi789jkl0mnopqrstuv";
+      const { matches } = scanAndRedact(payload);
+      expect(matches.some((m) => m.type === "anthropic-api-key")).toBe(true);
+    });
+
+    it("detects a Greek-homoglyph OpenAI project key", () => {
+      // Greek ο (U+03BF) replaces ASCII o. After map, it's `sk-proj-…`.
+      const payload =
+        "token=sk-pr\u03BFj-abcd1234efgh5678ijkl9012mnop3456";
+      const { matches } = scanAndRedact(payload);
+      expect(matches.some((m) => m.type === "openai-project-key")).toBe(true);
+    });
+
+    it("detects a key with combining diacritics splitting every char", () => {
+      // Each ASCII char followed by a combining acute accent (U+0301). NFD
+      // decomposes, we strip \p{M}, back to plain ASCII.
+      const parts = "sk-ant-api03-abc123def456ghi789jkl0mnopqrstuv";
+      const payload = parts.split("").join("\u0301") + "\u0301";
+      const { matches } = scanAndRedact(payload);
+      expect(matches.some((m) => m.type === "anthropic-api-key")).toBe(true);
+    });
+
+    it("preserves legitimate multilingual text when no secret present", () => {
+      const payload = "café résumé naïve — no secrets here";
+      const { matches, redacted } = scanAndRedact(payload);
+      expect(matches.length).toBe(0);
+      // When there are zero matches we return the original text verbatim.
+      expect(redacted).toBe(payload);
+    });
+  });
+
   describe("bonus — base64-encoded secrets", () => {
     it("detects an Anthropic key smuggled as base64", () => {
       const b64 = Buffer.from(anthropicKeyRaw).toString("base64");
