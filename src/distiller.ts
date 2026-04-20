@@ -1,6 +1,11 @@
 import type { ParsedSession } from "./parsers/types.js";
 import { buildDistillPrompt } from "./distiller-prompt.js";
-import { scanAndRedact, summarize, type SecretMatch } from "./secret-scan.js";
+import {
+  scanAndRedact,
+  SecretsDetectedError,
+  type SecretMatch,
+} from "./secret-scan.js";
+import { sanitizeForTerminal } from "./terminal-safety.js";
 import {
   judgeSession,
   NotDistillableError,
@@ -29,24 +34,22 @@ export interface DistillOptions {
   forceDistill?: boolean;
 }
 
-export { NotDistillableError, DISTILL_PROMPT_VERSION };
-
-export class SecretsDetectedError extends Error {
-  constructor(public matches: SecretMatch[]) {
-    super(
-      `Found ${matches.length} potential secret(s) in session. Run with --redact to redact and continue, --no-llm to stay local, or --allow-secrets to send as-is (not recommended).\n${summarize(matches)}`
-    );
-    this.name = "SecretsDetectedError";
-  }
-}
+// SecretsDetectedError now lives in secret-scan.ts (so that distiller-judge
+// can throw it without an import cycle). Re-exported here for backwards
+// compatibility with v0.3.0 consumers.
+export { NotDistillableError, DISTILL_PROMPT_VERSION, SecretsDetectedError };
 
 export class DistillationAbortedError extends Error {
   constructor(
     public abortKind: "no_artifact" | "no_reusable_pattern",
     public reason: string
   ) {
+    // Audit #3 R1 — sanitize the LLM-controlled reason before embedding it
+    // into the message. Otherwise console.error rendering this message would
+    // execute ANSI/OSC sequences embedded by a jailbroken distiller model.
+    const safeReason = sanitizeForTerminal(reason);
     super(
-      `Distiller aborted: ${abortKind}. ${reason}\n  Override with --force-distill to bypass.`
+      `Distiller aborted: ${abortKind}. ${safeReason}\n  Override with --force-distill to bypass.`
     );
     this.name = "DistillationAbortedError";
   }
@@ -195,7 +198,14 @@ async function llmDistill(
 
   // Step 1 — quality gate. Cheap Haiku call decides whether to spend Sonnet.
   if (!forceDistill) {
-    const judgeOpts: JudgeOptions = { provider, model: judgeModel };
+    // Audit #3 S1 — propagate the user's secret policy to the judge call so
+    // the cheap-gate prompt is scanned BEFORE it leaves the host.
+    const judgeOpts: JudgeOptions = {
+      provider,
+      model: judgeModel,
+      secretPolicy,
+      onSecretsDetected,
+    };
     const judgment = await judgeSession(session, judgeOpts);
     onJudgment?.(judgment);
     if (!judgment.distillable) {

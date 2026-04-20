@@ -275,3 +275,18 @@ export function summarize(matches: SecretMatch[]): string {
     .map(([type, count]) => `  - ${type}: ${count}`)
     .join("\n");
 }
+
+/**
+ * Thrown by any code path that detects secrets while running with
+ * `secretPolicy: "abort"`. Lives in this module (rather than `distiller.ts`)
+ * so that `distiller-judge.ts` can throw it without creating an import cycle
+ * — both modules already depend on `secret-scan.ts`.
+ */
+export class SecretsDetectedError extends Error {
+  constructor(public matches: SecretMatch[]) {
+    super(
+      `Found ${matches.length} potential secret(s) in session. Run with --redact to redact and continue, --no-llm to stay local, or --allow-secrets to send as-is (not recommended).\n${summarize(matches)}`
+    );
+    this.name = "SecretsDetectedError";
+  }
+}

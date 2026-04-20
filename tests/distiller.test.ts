@@ -1,6 +1,32 @@
 import { describe, it, expect } from "vitest";
-import { distillSkill } from "../src/distiller.js";
+import { distillSkill, DistillationAbortedError } from "../src/distiller.js";
 import type { ParsedSession } from "../src/parsers/types.js";
+
+// Audit #3 R1 — see NotDistillableError counterpart in distiller-judge.test.ts.
+// \n (\x0a) is allowed because the message template adds one structural newline.
+const ANSI_ENTRY_BYTES_RE = /[\x00-\x09\x0b-\x1f\x7f-\x9f]/;
+
+describe("DistillationAbortedError — terminal-injection guard (audit #3 R1)", () => {
+  it("strips ANSI escape bytes from the constructed message", () => {
+    const err = new DistillationAbortedError(
+      "no_artifact",
+      "\x1b[2J\x1b[H\x1b[32m✓ FAKE: skill written\x1b[0m"
+    );
+    expect(err.message).not.toMatch(ANSI_ENTRY_BYTES_RE);
+    expect(err.message).toContain("FAKE: skill written");
+  });
+
+  it("strips embedded newlines so the reason cannot fake a new log line", () => {
+    const err = new DistillationAbortedError(
+      "no_reusable_pattern",
+      "innocent\n✓ Wrote skill to /tmp/owned.md"
+    );
+    // Template introduces exactly one newline. Smuggled newlines from the
+    // reason would push the count above one.
+    const newlineCount = (err.message.match(/\n/g) ?? []).length;
+    expect(newlineCount).toBe(1);
+  });
+});
 
 const mockSession: ParsedSession = {
   sessionId: "test-session-123",

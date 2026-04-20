@@ -41,6 +41,30 @@ describe("parseDistillPayload", () => {
     }
   });
 
+  it("parses the second canonical abort kind: no_reusable_pattern", () => {
+    const raw = JSON.stringify({
+      abort: "no_reusable_pattern",
+      reason: "all generic tool usage",
+    });
+    const res = parseDistillPayload(raw, "fallback");
+    expect(res.kind).toBe("abort");
+    if (res.kind === "abort") {
+      expect(res.payload.abort).toBe("no_reusable_pattern");
+    }
+  });
+
+  // Audit #3 D1 — strict abort allow-list. Anything other than the two
+  // canonical kinds must NOT be accepted as an abort. Otherwise the LLM can
+  // route any payload through the abort branch (which carries reason directly
+  // to the error path), making D1 a load-bearing rung for the R1 chain.
+  it("rejects unknown abort kinds instead of silently coercing", () => {
+    const raw = JSON.stringify({
+      abort: "rm -rf /",
+      reason: "anything",
+    });
+    expect(() => parseDistillPayload(raw, "fallback")).toThrow();
+  });
+
   it("caps steps at 8 even when the LLM returns more", () => {
     const raw = JSON.stringify({
       name: "many-steps",
