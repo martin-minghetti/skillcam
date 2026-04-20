@@ -1,4 +1,4 @@
-import { basename, relative, isAbsolute, sep } from "path";
+import { basename, relative, isAbsolute, resolve, sep } from "path";
 import { homedir } from "os";
 import type { ToolCall } from "./parsers/types.js";
 
@@ -15,7 +15,20 @@ const HOME = homedir();
 
 export function anonymizePath(p: string, projectRoot: string): string {
   if (!p || typeof p !== "string") return p;
-  if (!isAbsolute(p)) return p;
+
+  // Audit #3 A1 — relative paths previously passed through verbatim, which
+  // leaked out-of-project structure when a tool call carried something like
+  // "../../client-prod/.env". Now: resolve against projectRoot when we have
+  // one; if the result stays inside the project, return the relative form;
+  // otherwise collapse to basename so no traversal context survives.
+  if (!isAbsolute(p)) {
+    if (!isAbsolute(projectRoot)) return basename(p);
+    const resolved = resolve(projectRoot, p);
+    const rel = relative(projectRoot, resolved);
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+    return basename(p);
+  }
+
   if (isAbsolute(projectRoot)) {
     const rel = relative(projectRoot, p);
     if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;

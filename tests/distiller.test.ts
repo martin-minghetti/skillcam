@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { distillSkill, DistillationAbortedError } from "../src/distiller.js";
 import type { ParsedSession } from "../src/parsers/types.js";
 
@@ -88,4 +88,58 @@ describe("distillSkill", () => {
     expect(skill).toContain("## Steps");
     expect(skill).toContain("source_session: test-session-123");
   });
+});
+
+// Audit #3 D2 — `--force-distill` previously skipped only the cheap-gate
+// judge. If the main distiller emitted {"abort": ...} the run still died
+// with exit 8, contradicting the flag's documented promise of "distill even
+// exploratory sessions". Now: when forceDistill is set and the distiller
+// emits an abort, we fall back to template mode so the flag always produces
+// a file.
+describe("distillSkill — --force-distill semantics (audit #3 D2)", () => {
+  const ORIGINAL_KEY = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "fake-key-for-mock";
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_KEY === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = ORIGINAL_KEY;
+    vi.resetModules();
+  });
+
+  it("falls back to template mode when forceDistill is set and the distiller emits an abort payload", async () => {
+    // Mock the SDK so the main distill call returns an abort JSON.
+    vi.doMock("@anthropic-ai/sdk", () => {
+      class FakeAnthropic {
+        messages = {
+          create: async () => ({
+            content: [
+              {
+                type: "text",
+                text: '{"abort":"no_artifact","reason":"forced abort"}',
+              },
+            ],
+          }),
+        };
+      }
+      return { default: FakeAnthropic };
+    });
+    // Re-import the distiller AFTER the mock so the dynamic import inside
+    // resolves to the fake.
+    const { distillSkill: distillFresh } = await import(
+      "../src/distiller.js?d2-force"
+    );
+    const skill = await distillFresh(mockSession, {
+      useLlm: true,
+      forceDistill: true,
+    });
+    // Template stub is the documented fallback shape — it always carries the
+    // template-stub tag and points the user at --llm.
+    expect(skill).toContain("template-stub");
+    expect(skill).toContain("source_session: test-session-123");
+  });
+
 });

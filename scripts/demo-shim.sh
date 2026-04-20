@@ -5,6 +5,10 @@
 #
 # This file is sourced by the tape before any `skillcam ...` Type. It is
 # never shipped to end users.
+#
+# If you sourced this in an interactive shell by accident (audit #3 D3),
+# call `_skillcam_demo_cleanup` to restore the real `skillcam` binary
+# and unset the helper variables.
 
 # Resolve the shim's own directory. Using BASH_SOURCE directly so this works
 # regardless of the cwd the tape happens to be in when it sources the file.
@@ -33,4 +37,13 @@ skillcam() {
       return 1
       ;;
   esac
+}
+
+# Audit #3 D3 — explicit cleanup. The tape can call this after recording,
+# and a developer who sourced the file by accident in their interactive
+# shell can call it manually to drop the override.
+_skillcam_demo_cleanup() {
+  unset -f skillcam 2>/dev/null
+  unset _SKILLCAM_DEMO_SELF _SKILLCAM_DEMO_DIR 2>/dev/null
+  unset -f _skillcam_demo_cleanup 2>/dev/null
 }
