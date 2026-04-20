@@ -56,12 +56,58 @@ export type DistillResult =
   | { kind: "skill"; payload: SkillPayload }
   | { kind: "abort"; payload: AbortPayload };
 
-// Linear-time kebab validator. The naive /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
-// is polynomial-time under backtracking when fed strings like "a-----..."
-// (CodeQL js/polynomial-redos). This formulation consumes one char per
-// step with an alternation (either a kebab char, or a dash immediately
-// followed by a kebab char), which has no ambiguous paths.
-const KEBAB = /^[a-z](?:[a-z0-9]|-[a-z0-9])*$/;
+const MAX_NAME_LEN = 64;
+const MAX_RAW_INPUT_LEN = 256;
+
+// Char-by-char kebab validator. Avoids regex entirely (CodeQL
+// js/polynomial-redos flagged the earlier replace+test chain as
+// polynomial under adversarial inputs). Pure O(n) with a constant
+// upper bound on n thanks to MAX_NAME_LEN.
+function isKebab(s: string): boolean {
+  if (s.length === 0 || s.length > MAX_NAME_LEN) return false;
+  const first = s.charCodeAt(0);
+  const isLower = (c: number) => c >= 97 && c <= 122;
+  const isDigit = (c: number) => c >= 48 && c <= 57;
+  if (!isLower(first)) return false;
+  for (let i = 1; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (isLower(c) || isDigit(c)) continue;
+    if (c === 45) {
+      if (i === s.length - 1) return false;
+      const next = s.charCodeAt(i + 1);
+      if (!(isLower(next) || isDigit(next))) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// Normalize a free-form string to kebab-case without regex: lowercase,
+// collapse runs of non-alphanumeric to a single '-', then trim leading
+// and trailing '-'. Matches the previous behavior with linear time.
+function toKebabChars(raw: string): string {
+  const bounded = raw.length > MAX_RAW_INPUT_LEN ? raw.slice(0, MAX_RAW_INPUT_LEN) : raw;
+  const lower = bounded.toLowerCase();
+  const chars: string[] = [];
+  let lastDash = false;
+  for (let i = 0; i < lower.length; i++) {
+    const c = lower.charCodeAt(i);
+    const alphaNum = (c >= 97 && c <= 122) || (c >= 48 && c <= 57);
+    if (alphaNum) {
+      chars.push(lower[i] ?? "");
+      lastDash = false;
+    } else if (!lastDash) {
+      chars.push("-");
+      lastDash = true;
+    }
+  }
+  let start = 0;
+  let end = chars.length;
+  while (start < end && chars[start] === "-") start++;
+  while (end > start && chars[end - 1] === "-") end--;
+  return chars.slice(start, end).join("");
+}
 
 function normalizeTag(t: string): string {
   return t.trim().toLowerCase().replace(/[\s_]+/g, "-");
@@ -98,11 +144,8 @@ function capList(raw: unknown, max: number): string[] {
 
 function sanitizeKebab(raw: unknown, fallback: string): string {
   const base = typeof raw === "string" ? raw : fallback;
-  const norm = base
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return KEBAB.test(norm) ? norm.slice(0, 64) : fallback;
+  const norm = toKebabChars(base);
+  return isKebab(norm) ? norm.slice(0, MAX_NAME_LEN) : fallback;
 }
 
 export function parseDistillPayload(
