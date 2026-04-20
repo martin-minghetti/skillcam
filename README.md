@@ -40,11 +40,16 @@ Numbers above are illustrative on a typical "fix the auth tests"-style task. You
 
 Your AI coding agent solves something today. Tomorrow the same problem comes back and the agent starts from zero — same files read, same tools tried, same tokens spent. The session log already on disk in `~/.claude/projects/` or `~/.codex/sessions/` has the answer. SkillCam pulls it out into a `SKILL.md` your agent reads next time.
 
-One command. No daemon. No config. Works without an LLM (template stub) or with one (real distill).
+One command, no daemon. Works without an LLM (template stub) or with one (real distill). Has a small set of opt-in/opt-out env vars and writes one event line per successful distill — see [Side effects](#side-effects-on-disk) below.
 
 ```bash
 npx skillcam distill --latest
 ```
+
+## Requirements
+
+- Node.js `>= 20.0.0` (uses `fetch`, `AbortSignal.timeout`, top-level `await`).
+- Optional: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for LLM mode. `--no-llm` works offline.
 
 ## How It Works
 
@@ -80,11 +85,11 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 
 - **Discover** — scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files. Each agent format has its own parser. Sessions are sorted by most recent first.
 - **Parse** — reads the raw JSONL into a typed shape: user/assistant messages, tool calls with inputs/outputs, files modified, token usage, project metadata.
-- **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Forces the model to invoke a typed tool (`report_judgment`) so the verdict can't be smuggled through raw text. The verdict is then cross-checked against deterministic local signals (`filesModified`, `totalToolCalls`); a `distillable: true` verdict on a session with zero artifacts is overridden to abort.
-- **Distill** — (LLM mode) Sonnet emits strict JSON; template mode writes a stub.
+- **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Forces the model to invoke a typed tool (`report_judgment`) so the verdict can't be smuggled through raw text. The verdict is then cross-checked against deterministic local signals (`filesModified`, `totalToolCalls`); a `distillable: true` verdict on a session with zero artifacts is overridden to abort. **This is one of two provider network calls in LLM mode.**
+- **Distill** — (LLM mode) Sonnet emits strict JSON; template mode writes a stub. **This is the second provider network call in LLM mode.** Together with the judge, a single `skillcam distill` in LLM mode performs **two** LLM round-trips before writing.
 - **Render** — JSON → SKILL.md in TypeScript. Schema-validated, frontmatter under our control, tags restricted to a closed taxonomy.
 - **Dedup** — before write, the new skill's `description` is compared (Jaro-Winkler) against every existing skill in `--output`. If any match exceeds the threshold (default `0.80`), exit `9` and surface the matches. Bypass with `--no-dedup`; tune with `--dedup-threshold 0.85`. Catches the common shape where two productive sessions on the same problem produce two near-identical skills under different names.
-- **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, judge verdict, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
+- **Emit** — appends one JSONL line per successful distill to `./agents/_core/events.jsonl` (relative to the cwd) with session metadata, skill path, token costs, judge verdict, and distill mode. **Today this is just a structured log on disk** — there is no other tool consuming it yet. The schema (`schema_version: 0.1`) is published so future tooling can read it, but for now treat it as an audit trail of what `skillcam distill` did. Opt out with `SKILLCAM_NO_EVENTS=1`.
 
 ### How well does the judge filter?
 
@@ -100,7 +105,20 @@ The judge is one cheap LLM call. To make its quality measurable instead of asser
 
 Reproduce: `ANTHROPIC_API_KEY=… npm run eval:judge` (cost ≈ $0.001). Full report at `eval/out/judge-results.md` after the run.
 
-**Caveat** — five fixtures is enough to catch obvious regressions, not enough to claim the judge generalizes. If you have an agent session where the judge made the wrong call (either direction), please open an issue with the redacted JSONL — every real-world example sharpens the eval set.
+**Caveat** — five hand-curated synthetic fixtures is enough to catch obvious regressions, not statistical evidence that the judge generalizes. The 100% number above is honest about what it measured and dishonest about what it implies. If you have an agent session where the judge made the wrong call (either direction), please open an issue with the redacted JSONL — every real-world example sharpens the eval set.
+
+## Side effects on disk
+
+`skillcam distill` is not pure — it writes more than the SKILL.md. Honest list of everything it touches:
+
+| What | Where | When | How to opt out |
+|------|-------|------|----------------|
+| The skill itself | `--output/<name>.md` (default `./skills/`) | every successful distill | n/a (the point of the tool) |
+| Event log line | `./agents/_core/events.jsonl` (cwd-relative) | every successful distill | `SKILLCAM_NO_EVENTS=1` |
+| Update-check cache | `~/.skillcam/update-check.json` | once per 24h on TTY runs that aren't `npx` / CI / `NODE_ENV=test` | `SKILLCAM_SKIP_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER=1`) |
+| Update-check network call | `https://registry.npmjs.org/skillcam/latest` | when the cache is stale | same as above |
+
+**Reads** (no writes): session JSONLs in `~/.claude/projects/` and `~/.codex/sessions/`, plus existing `.md` files in `--output` for the dedup check.
 
 ## Security
 
@@ -110,7 +128,7 @@ Agent sessions can carry secrets (API keys, tokens, file contents) and can be ho
 - **On disk** — trust-root confinement on read, symlink rejection, atomic writes with `O_EXCL`, path-traversal guards on the LLM-controlled filename, 50 MB session cap + 100 KB skill cap.
 - **Supply chain** — published from CI via npm Trusted Publishing (OIDC) with Sigstore provenance, no long-lived tokens.
 
-Three adversarial audits are recorded in the project notes; the latest (v0.3.1) closed four findings in the v0.3.0 distiller rewrite. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
+Four adversarial audits are recorded in the project notes (audits #1-#3 on the v0.2.x and v0.3.0 surfaces, audit #4 retroactive on v0.4.0/v0.4.1). Across the four audits, ~30 findings were filed and fixed; the most recent (v0.4.2) closed three blockers — including one that was a regression of an earlier fix — that shipped because v0.4.0 and v0.4.1 went out without an audit of their own. **Honest read**: the threat model is taken seriously and the audit cadence is real, but the project is recent and most of the security validation has happened in this repo, not in real adversarial use. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
 
 ## Installation
 
@@ -165,13 +183,13 @@ skillcam distill --latest --no-dedup                   # Skip the similarity che
 skillcam distill --latest --dedup-threshold 0.85       # Tighten the dedup check (default 0.80)
 ```
 
-**Exit codes** (v0.4.1)
+**Exit codes** (v0.4.3)
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success — skill written to disk |
 | `1` | Session not found (run `skillcam list` to see available sessions) |
-| `2` | Secrets detected and policy is `abort` (use `--redact` or `--allow-secrets`) |
+| `2` | Secrets detected and policy is `abort` (use `--redact` or `--allow-secrets`), OR `--dedup-threshold` value is invalid (not a number in `[0, 1]`) |
 | `7` | Quality judge refused — session not distillable (use `--force-distill` to override) |
 | `8` | LLM emitted an `abort` payload after the judge passed (session content broke the anti-literal rule) |
 | `9` | A similar skill already exists in `--output` (use `--no-dedup` to write anyway) |
