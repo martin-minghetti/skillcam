@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.2 — 2026-04-20
+
+> **Security release.** Closes the four findings audit #3 deferred from v0.3.1 (`A1`, `D2`, `D3`, `J2`). No public API changes; drop-in upgrade.
+
+### Security fixes
+
+- **J2 (medium)** — The judge now uses strict tool-calling instead of asking the model to emit raw JSON in a text response. Both providers (`@anthropic-ai/sdk` `tools` + `tool_choice: { type: "tool", name: "report_judgment" }`, OpenAI `tools` + `tool_choice: { type: "function", ... }`) are forced to invoke a single typed tool with a JSON Schema (`distillable: boolean`, `reason: string`, `confidence: enum`). Closes the family of bypasses that worked by injecting raw output bytes (malformed JSON, text-only replies, control-char smuggling). Does **not** prevent a jailbroken model from using the tool *correctly* but lying about `distillable` — that defense (cross-checking with local signals) is deferred to a future release.
+- **A1 (low)** — `anonymizePath` now resolves relative paths against `projectRoot` and collapses anything that escapes the project to `basename`. Previously a tool call carrying `../../client-prod/.env` or similar passed through verbatim, leaking out-of-project directory structure into the prompt.
+- **D2 (low)** — `--force-distill` now also bypasses the distiller's own abort, falling back to template mode if the LLM emits `{"abort": ...}`. Previously the flag only skipped the cheap-gate judge and the run still died with exit `8` if the main distill aborted, contradicting the flag's documented promise.
+- **D3 (low)** — `scripts/demo-shim.sh` now exports `_skillcam_demo_cleanup`, callable to drop the `skillcam` mock function and helper variables. Useful when the shim is sourced by accident in an interactive shell.
+
+### Tests
+
+- 9 new tests, written test-first against the four findings (4 for J2, 4 for A1, 1 for D2, plus a smoke test for D3).
+- Full suite: 177 / 177 passing (was 169).
+- First SDK mocks land in the suite (`@anthropic-ai/sdk` and `openai`) — if you run the suite in a CI without those packages installed, this is a behavior change worth noting.
+
+### Known issues
+
+- Judge bypass via session-content prompt injection that targets the *value* of `distillable` (rather than the output channel) is still possible. See J2 above. Cost is bounded to one Sonnet call per bypass.
+
 ## 0.3.1 — 2026-04-20
 
 > **Security release.** Closes the four actionable findings from security audit #3 of the v0.3.0 distiller rewrite. No API changes; drop-in upgrade.
