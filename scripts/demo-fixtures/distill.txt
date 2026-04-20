@@ -1,0 +1,8 @@
+
+✓ Read session a1b2c3d4... (claude-code)
+✓ Found 42 tool calls across 24 assistant messages
+✓ Quality judge (high): session has a clear pattern — targeted test fix with artifact
+✓ Distilling with claude-sonnet-4-6...
+✓ Wrote skill to ./skills/fix-broken-imports-after-rename-refactor.md
+
+Your agent can now reuse this skill in future sessions.

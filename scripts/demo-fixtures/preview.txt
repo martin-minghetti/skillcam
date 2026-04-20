@@ -1,0 +1,9 @@
+
+Session: a1b2c3d4...
+Agent:   claude-code
+Project: example-app
+Branch:  main
+Messages: 18 user, 24 assistant
+Tools:   42 calls (Read, Edit, Bash, Grep)
+Tokens:  28400 in / 4200 out
+Files:   src/auth.ts, tests/auth.test.ts
