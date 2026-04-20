@@ -1,6 +1,6 @@
 {
   "name": "skillcam",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
@@ -18,7 +18,8 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "demo": "tsx scripts/demo.ts",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx eval/run.ts",
+    "eval:judge": "tsx eval/run.ts --judge-only"
   },
   "keywords": [
     "ai",

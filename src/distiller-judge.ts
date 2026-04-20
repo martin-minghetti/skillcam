@@ -187,7 +187,48 @@ export function coerceResult(raw: string): JudgeResult {
   return { distillable, reason, confidence, raw };
 }
 
-export async function judgeSession(
+/**
+ * v0.4.0 — Cross-check the LLM judge against deterministic session signals.
+ *
+ * The judge is a single Haiku call and can be jailbroken (audit #3 J2
+ * residual). This is defense in depth: deterministic signals from the
+ * parsed session can override or flag the verdict.
+ *
+ *  - HARD override (judge=true → false): the judge said distillable but
+ *    the session has zero filesModified AND zero toolCalls. There is no
+ *    artifact to capture. Refuse.
+ *  - SOFT flag (judge=false stays false): the judge said no but the
+ *    session has both files modified and many tool calls. The judge
+ *    stays the oracle of "no" (false negatives are recoverable — the
+ *    user can re-run with --force-distill — false positives waste
+ *    Sonnet tokens and pollute the skill folder), but tag the reason
+ *    so a curious user sees the disagreement.
+ */
+export function applyLocalSignals(
+  judgment: JudgeResult,
+  session: ParsedSession
+): JudgeResult {
+  const noArtifact = session.filesModified.length === 0 && session.totalToolCalls === 0;
+  const productive = session.filesModified.length > 0 && session.totalToolCalls > 5;
+
+  if (judgment.distillable && noArtifact) {
+    return {
+      distillable: false,
+      reason: `local signals contradict judge: 0 files modified and 0 tool calls (original: ${judgment.reason})`,
+      confidence: "high",
+      raw: judgment.raw,
+    };
+  }
+  if (!judgment.distillable && productive) {
+    return {
+      ...judgment,
+      reason: `${judgment.reason} (local signals suggest distillable: ${session.filesModified.length} files modified, ${session.totalToolCalls} tool calls — judge disagreed)`,
+    };
+  }
+  return judgment;
+}
+
+async function runJudgeLlm(
   session: ParsedSession,
   options: JudgeOptions = {}
 ): Promise<JudgeResult> {
@@ -325,6 +366,21 @@ export async function judgeSession(
     reason: "unknown provider, judge skipped",
     confidence: "low",
   };
+}
+
+/**
+ * Public entry point. Runs the LLM judge, then cross-checks the verdict
+ * against deterministic session signals (v0.4.0). The cross-check can
+ * override a distillable=true verdict that has zero artifacts to back it
+ * up, and tag a distillable=false verdict that contradicts strong local
+ * signals (informational — judge stays the oracle of "no").
+ */
+export async function judgeSession(
+  session: ParsedSession,
+  options: JudgeOptions = {}
+): Promise<JudgeResult> {
+  const judgment = await runJudgeLlm(session, options);
+  return applyLocalSignals(judgment, session);
 }
 
 export class NotDistillableError extends Error {

@@ -3,7 +3,9 @@ import {
   buildJudgePrompt,
   coerceResult,
   judgeSession,
+  applyLocalSignals,
   NotDistillableError,
+  type JudgeResult,
 } from "../src/distiller-judge.js";
 import { SecretsDetectedError } from "../src/secret-scan.js";
 import type { ParsedSession } from "../src/parsers/types.js";
@@ -356,6 +358,49 @@ describe("judgeSession — strict tool-calling (audit #3 J2)", () => {
     });
   });
 
+  it("forces tool_choice on OpenAI and parses from tool_calls (sanity)", async () => {
+    // Cheap regression test next to the J2 fixes — ensures the OpenAI path
+    // actually returns the parsed judgment, not just shape-asserts the request.
+    vi.doMock("openai", () => {
+      class FakeOpenAI {
+        chat = {
+          completions: {
+            create: async () => ({
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        function: {
+                          name: "report_judgment",
+                          arguments: JSON.stringify({
+                            distillable: false,
+                            reason: "openai abort",
+                            confidence: "medium",
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          },
+        };
+      }
+      return { default: FakeOpenAI };
+    });
+    const { judgeSession: judgeFresh } = await import(
+      "../src/distiller-judge.js?j2-openai-parse"
+    );
+    const r = await judgeFresh(makeSession(), {
+      provider: "openai",
+      secretPolicy: "allow",
+    });
+    expect(r.distillable).toBe(false);
+    expect(r.reason).toBe("openai abort");
+  });
+
   it("falls back to text parsing if the model ignores the tool and replies with prose", async () => {
     // Defense in depth: if the SDK response has no tool_use block, we
     // still want to try to extract a JSON judgment rather than hard-fail.
@@ -381,5 +426,78 @@ describe("judgeSession — strict tool-calling (audit #3 J2)", () => {
     const r = await judgeFresh(makeSession(), { secretPolicy: "allow" });
     expect(r.distillable).toBe(true);
     expect(r.reason).toBe("legacy text path");
+  });
+});
+
+// v0.4.0 quality signals — the judge is a single LLM call and can be
+// jailbroken (J2 residual). Cross-check its verdict against deterministic
+// session signals: if the judge says distillable but the session has zero
+// artifacts, override to abort. Inverse direction is informational only —
+// the judge stays the oracle of "no", we just flag the disagreement.
+describe("applyLocalSignals — judge × deterministic signals cross-check", () => {
+  function makeJudgment(distillable: boolean, reason = "j"): JudgeResult {
+    return { distillable, reason, confidence: "high" };
+  }
+
+  function emptySession(): ParsedSession {
+    return {
+      sessionId: "x",
+      agent: "claude-code",
+      project: "/p",
+      branch: "main",
+      startedAt: "",
+      endedAt: "",
+      messages: [],
+      totalTokens: { input: 0, output: 0 },
+      totalToolCalls: 0,
+      filesModified: [],
+      summary: { userMessages: 0, assistantMessages: 0, toolCalls: 0, uniqueTools: [] },
+    };
+  }
+
+  function productiveSession(): ParsedSession {
+    return {
+      ...emptySession(),
+      totalToolCalls: 12,
+      filesModified: ["src/foo.ts", "src/bar.ts"],
+      summary: { userMessages: 1, assistantMessages: 3, toolCalls: 12, uniqueTools: ["Read", "Edit", "Bash"] },
+    };
+  }
+
+  it("HARD override: judge=true + 0 files + 0 toolCalls → distillable becomes false", () => {
+    const out = applyLocalSignals(makeJudgment(true, "looks great"), emptySession());
+    expect(out.distillable).toBe(false);
+    expect(out.reason).toMatch(/local signals/i);
+  });
+
+  it("leaves judge=true alone when the session has artifacts", () => {
+    const out = applyLocalSignals(makeJudgment(true, "real artifact"), productiveSession());
+    expect(out.distillable).toBe(true);
+    expect(out.reason).toBe("real artifact");
+  });
+
+  it("SOFT flag: judge=false + productive session → keeps abort but tags reason", () => {
+    const out = applyLocalSignals(makeJudgment(false, "no pattern"), productiveSession());
+    expect(out.distillable).toBe(false); // judge stays the oracle of "no"
+    expect(out.reason).toMatch(/local signals/i); // but flag the disagreement
+  });
+
+  it("does not flag when judge=false agrees with empty signals", () => {
+    const out = applyLocalSignals(makeJudgment(false, "pure exploration"), emptySession());
+    expect(out.distillable).toBe(false);
+    expect(out.reason).toBe("pure exploration");
+  });
+
+  it("HARD override leaves the original raw + bumps confidence to high (deterministic signal)", () => {
+    const original: JudgeResult = {
+      distillable: true,
+      reason: "judge said yes",
+      confidence: "low",
+      raw: "{...}",
+    };
+    const out = applyLocalSignals(original, emptySession());
+    expect(out.distillable).toBe(false);
+    expect(out.confidence).toBe("high");
+    expect(out.raw).toBe("{...}");
   });
 });
