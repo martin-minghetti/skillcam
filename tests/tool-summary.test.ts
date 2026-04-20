@@ -18,8 +18,27 @@ describe("anonymizePath", () => {
     expect(anonymizePath("/etc/passwd", projectRoot)).toBe("passwd");
   });
 
-  it("passes through relative paths unchanged", () => {
+  it("returns project-relative form when a relative path resolves inside the project", () => {
+    // "src/foo.ts" resolves to <projectRoot>/src/foo.ts which is inside the
+    // project — the relative form is the safe thing to expose to the LLM.
     expect(anonymizePath("src/foo.ts", projectRoot)).toBe("src/foo.ts");
+  });
+
+  // Audit #3 A1 — relative paths that escape the project root previously
+  // passed through verbatim, leaking out-of-project structure (and possibly
+  // usernames or client names) into the prompt.
+  it("collapses an escaping relative path to basename (no traversal leaks)", () => {
+    expect(anonymizePath("../../../client-prod/.env", projectRoot)).toBe(".env");
+  });
+
+  it("collapses a deeply escaping relative path to basename", () => {
+    expect(
+      anonymizePath("../../infra/terraform.tfvars", projectRoot)
+    ).toBe("terraform.tfvars");
+  });
+
+  it("returns basename when the relative path has no project root to resolve against", () => {
+    expect(anonymizePath("../foo/bar.ts", "")).toBe("bar.ts");
   });
 
   it("leaves empty / non-string inputs alone", () => {
