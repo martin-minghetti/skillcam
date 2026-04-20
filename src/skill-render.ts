@@ -158,10 +158,16 @@ export function parseDistillPayload(
     throw new Error("Distiller output did not contain a parseable JSON object");
   }
 
-  if (typeof obj.abort === "string") {
-    const abort = obj.abort === "no_artifact" ? "no_artifact" : "no_reusable_pattern";
+  // Audit #3 D1 — strict abort allow-list. Previously any string value for
+  // `abort` was coerced into "no_reusable_pattern", which let the LLM route
+  // arbitrary payloads through the abort branch (a load-bearing rung for the
+  // R1 terminal-injection chain). Now only the two documented kinds are
+  // accepted; anything else falls through to the schema validator below and
+  // gets rejected with the standard "missing required fields" error, which
+  // the caller (`distiller.ts`) catches and falls back to template mode.
+  if (obj.abort === "no_artifact" || obj.abort === "no_reusable_pattern") {
     const reason = typeof obj.reason === "string" ? obj.reason : "no reason";
-    return { kind: "abort", payload: { abort, reason } };
+    return { kind: "abort", payload: { abort: obj.abort, reason } };
   }
 
   const payload: SkillPayload = {
@@ -191,7 +197,7 @@ function coerceConfidence(raw: unknown): SkillPayload["confidence"] {
   return "low";
 }
 
-function extractFirstJson(text: string): Record<string, unknown> | null {
+export function extractFirstJson(text: string): Record<string, unknown> | null {
   if (!text) return null;
   const start = text.indexOf("{");
   if (start === -1) return null;
