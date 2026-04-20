@@ -79,19 +79,26 @@ One session becomes one skill. One skill turns the next run from a fresh discove
   <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/pipeline.svg" alt="Pipeline: discover → parse → distill (LLM or template) → emit → SKILL.md" width="600">
 </p>
 
+### Two-step quality pipeline (v0.3.0)
+
+1. **Quality judge** — a cheap Haiku call decides whether the session even contains a reusable pattern. Exploratory sessions, abandoned attempts, and tasks that produced no artifact short-circuit here with exit code `7`, before any Sonnet tokens are spent. Override with `--force-distill`.
+2. **Distill** — if the judge says yes, a Sonnet call emits a strict JSON payload (name, steps, decisions, `confidence`, `why_this_worked`, etc.). TypeScript validates the schema and renders the canonical `SKILL.md`. Frontmatter is never controlled by the LLM.
+
 ### Two distill modes
 
 | Mode | When to use | What happens |
 |------|-------------|--------------|
-| **LLM mode** (default) | You want polished, narrative skills | Sends a truncated view of the session to Claude or GPT with a distillation prompt. Produces clean "when to use", concrete steps, and summarized decisions. |
-| **Template mode** (`--no-llm`) | No API key, cost-sensitive, or sensitive session content | Extracts steps directly from tool calls. Deterministic, structured, zero network calls. SkillCam falls back here automatically if the LLM call fails. |
+| **LLM mode** (default) | You want a real skill — polished, specific, actionable | Runs the two-step pipeline above. Produces clean "when to use", concrete steps without tool-call literals, path-anonymized, with `confidence` + `why_this_worked` signals. See [`demo/RESULTS.md`](demo/RESULTS.md) for side-by-side output against v0.2.x. |
+| **Template mode** (`--no-llm`) | No API key / no network / privacy-only debug | Writes a minimal stub that captures session metadata (files modified, tools used, first user message) and tells you to re-run with `--llm` for a real skill. Not a substitute for the real distillation. |
 
 ### What each stage does
 
 - **Discover** — scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files. Each agent format has its own parser. Sessions are sorted by most recent first.
 - **Parse** — reads the raw JSONL into a typed shape: user/assistant messages, tool calls with inputs/outputs, files modified, token usage, project metadata.
-- **Distill** — converts the parsed session into a reusable skill via either mode above.
-- **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
+- **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Kills the #1 cause of low-quality skills — sessions that never should have been distilled.
+- **Distill** — (LLM mode) Sonnet emits strict JSON; template mode writes a stub.
+- **Render** — JSON → SKILL.md in TypeScript. Schema-validated, frontmatter under our control, tags restricted to a closed taxonomy.
+- **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, judge verdict, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
 
 ## Security
 
@@ -146,15 +153,25 @@ skillcam preview --latest --agent codex
 Distill a session into a reusable SKILL.md.
 
 ```bash
-skillcam distill --latest                              # Distill most recent session
+skillcam distill --latest                              # Distill most recent session (LLM mode, default)
 skillcam distill <session-id>                          # Distill specific session
-skillcam distill --latest --no-llm                     # Template mode (no API key needed)
-skillcam distill --latest --provider anthropic         # Use Claude for distillation
-skillcam distill --latest --provider openai --model gpt-4o  # Use GPT-4o
+skillcam distill --latest --provider openai --model gpt-4o  # Use GPT-4o for the main call
+skillcam distill --latest --judge-model claude-haiku-4-5-20251001   # Override judge model
+skillcam distill --latest --force-distill              # Skip the quality judge and distill anyway
 skillcam distill --latest --output ./my-skills/        # Custom output directory
 skillcam distill --latest --redact                     # Redact detected secrets before sending
 skillcam distill --latest --allow-secrets              # Send as-is even if secrets are detected
+skillcam distill --latest --no-llm                     # Template stub only (no API key, no real distill)
 ```
+
+**Exit codes** (v0.3.0)
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success — skill written to disk |
+| `2` | Secrets detected and policy is `abort` (use `--redact` or `--allow-secrets`) |
+| `7` | Quality judge refused — session not distillable (use `--force-distill` to override) |
+| `8` | LLM emitted an `abort` payload after the judge passed (session content broke the anti-literal rule) |
 
 By default, `distill` scans the prompt for common secret patterns (API keys, tokens, private keys) and aborts if any are found. See [`SECURITY.md`](SECURITY.md).
 
@@ -174,45 +191,68 @@ By default, `distill` scans the prompt for common secret patterns (API keys, tok
 | Anthropic | `--provider anthropic` | `ANTHROPIC_API_KEY` |
 | OpenAI | `--provider openai` | `OPENAI_API_KEY` |
 
-Template mode works for structured extraction. LLM mode produces more natural, actionable skills. If the LLM call fails, SkillCam falls back to template mode automatically.
+Template mode writes a stub only — it is not a substitute for the real distillation. Use LLM mode for anything you want an agent to reuse. If the LLM call fails, SkillCam falls back to the template stub so the command never crashes.
 
 ## Output Format
 
-Skills are standard markdown with YAML frontmatter:
+Skills are standard markdown with YAML frontmatter. This example is the actual output v0.3.0 produced from a session where an agent fixed failing auth tests (the full run is in [`demo/RESULTS.md`](demo/RESULTS.md)):
 
 ```markdown
 ---
-name: fix-auth-tests
-description: Debug and fix authentication test failures
-source_session: 6f1d981e-bf14-445b-9786-a4e0ac09df32
+name: fix-broken-imports-after-rename-refactor
+description: Fix failing tests caused by stale import names after a function was renamed during refactoring.
+source_session: fix-bug-0001
 source_agent: claude-code
-created: 2026-04-12
+created: 2026-04-20
+distill_prompt_version: v2.2026-04-19
+confidence: high
 tags:
   - testing
+  - debugging
+  - refactor
   - auth
 ---
 
-# Fix Auth Tests
+# Fix Broken Imports After Rename Refactor
 
 ## When to use
-When auth tests are failing after changes to the auth module.
+When tests fail with ReferenceError or 'not exported' errors after a refactor. Use when the error points to a symbol that no longer exists in the source but tests still reference the old name.
 
 ## Steps
-1. Read the failing test file to understand assertions
-2. Check the auth module for recent changes
-3. Fix the mock setup to match new auth flow
-4. Run tests to verify
+1. Run the full test suite to capture the exact error messages and failing test files
+2. Read the failing test file to identify which imported symbol is missing
+3. Read the corresponding source file to find the current exported name
+4. Fix the import in the test using an alias (e.g., `import { newName as oldName }`) to preserve test readability without touching source
+5. Re-run only the failing test suite to confirm the fix
+6. Run the full test suite to catch any regressions
 
 ## Example
-User: "The auth tests are broken again"
-Agent: Reads test, finds mock mismatch, fixes setup, all tests pass.
+User ran `npm test` after auth refactor; 3 tests failed with ReferenceError on `validateToken`. Agent read the test, then the source, and found the function was renamed to `verifyToken`. Fixed the import alias in the test file. Full suite passed.
 
 ## Key decisions
-- Always update mocks when changing auth flow
-- Check both unit and integration test suites
+- Fix the test import, not the source — the rename was intentional and the test was stale
+- Use an import alias (`import { verifyToken as validateToken }`) to minimize test churn
+- Always re-run the full suite after a targeted fix to rule out regressions
+- ReferenceError on an imported symbol almost always means a rename or deletion in source, not a logic bug
+
+## Why this worked
+Reading both the test and the source before editing revealed the rename as the sole root cause, avoiding unnecessary source changes
 ```
 
-See [`examples/skills/`](examples/skills/) for real skills generated from actual sessions.
+Frontmatter fields:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Kebab-case descriptive name, sanitized in TS (not LLM-controlled). Max 64 chars. |
+| `description` | One-sentence summary of what the skill does. |
+| `source_session` | Session ID this skill was distilled from. |
+| `source_agent` | `claude-code` or `codex`. |
+| `created` | ISO date (YYYY-MM-DD). |
+| `distill_prompt_version` | Version tag of the prompt used. Lets you re-distill when the prompt evolves. |
+| `confidence` | `high` / `medium` / `low` — the LLM's own rating of output quality. Useful for filtering and reuse-scoring. |
+| `tags` | 2–4 tags from a closed taxonomy (`testing`, `debugging`, `api`, `database`, `security`, `auth`, `performance`, `deployment`, `refactor`, `typescript`, `react`, `next-js`, `supabase`, `build`, `tooling`, `ci`, `migrations`, `observability`). |
+
+See [`examples/skills/`](examples/skills/) for curated reference skills and [`demo/RESULTS.md`](demo/RESULTS.md) for a side-by-side comparison of v0.2.x vs v0.3.0 output across five fixtures.
 
 ## Works with Obsidian
 
