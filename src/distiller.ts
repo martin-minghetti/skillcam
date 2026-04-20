@@ -270,6 +270,18 @@ async function llmDistill(
   }
 
   if (result.kind === "abort") {
+    // Audit #3 D2 — when --force-distill is set, fall back to template
+    // mode instead of throwing. The flag promises to "distill even
+    // exploratory sessions"; if the model emits abort and we still die
+    // with exit 8, the flag was effectively useless. Template stub is the
+    // documented fallback shape and keeps the contract that the flag
+    // always produces a file.
+    if (forceDistill) {
+      console.warn(
+        `⚠ Distiller emitted abort (${result.payload.abort}); --force-distill is set, falling back to template mode.`
+      );
+      return templateDistill(session, secretPolicy, onSecretsDetected);
+    }
     throw new DistillationAbortedError(result.payload.abort, result.payload.reason);
   }
 
