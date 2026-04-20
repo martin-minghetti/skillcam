@@ -1,19 +1,35 @@
 import type { ParsedSession } from "./parsers/types.js";
 import { buildDistillPrompt } from "./distiller-prompt.js";
 import { scanAndRedact, summarize, type SecretMatch } from "./secret-scan.js";
+import {
+  judgeSession,
+  NotDistillableError,
+  type JudgeOptions,
+  type JudgeResult,
+} from "./distiller-judge.js";
+import {
+  parseDistillPayload,
+  renderSkillMarkdown,
+  DISTILL_PROMPT_VERSION,
+  type DistillResult,
+} from "./skill-render.js";
 
 export type SecretPolicy = "abort" | "redact" | "allow";
 
-// 60 second timeout for LLM calls (M3)
 const LLM_TIMEOUT_MS = 60_000;
 
-interface DistillOptions {
+export interface DistillOptions {
   useLlm?: boolean;
   provider?: "anthropic" | "openai";
   model?: string;
+  judgeModel?: string;
   secretPolicy?: SecretPolicy;
   onSecretsDetected?: (matches: SecretMatch[]) => void;
+  onJudgment?: (judgment: JudgeResult) => void;
+  forceDistill?: boolean;
 }
+
+export { NotDistillableError, DISTILL_PROMPT_VERSION };
 
 export class SecretsDetectedError extends Error {
   constructor(public matches: SecretMatch[]) {
@@ -24,15 +40,18 @@ export class SecretsDetectedError extends Error {
   }
 }
 
-/**
- * Scan a field for secrets according to policy. Returns the value to use
- * (either original or redacted) or throws if policy is "abort" and matches found.
- *
- * C4 fix: template mode used to write session metadata (project, first user
- * message, filesModified) directly to SKILL.md without scanning. An agent that
- * put `ANTHROPIC_API_KEY=sk-ant-...` in a message or in a file path would have
- * it persisted in the skill file, where the user might commit it.
- */
+export class DistillationAbortedError extends Error {
+  constructor(
+    public abortKind: "no_artifact" | "no_reusable_pattern",
+    public reason: string
+  ) {
+    super(
+      `Distiller aborted: ${abortKind}. ${reason}\n  Override with --force-distill to bypass.`
+    );
+    this.name = "DistillationAbortedError";
+  }
+}
+
 function applyScanPolicy(
   value: string,
   location: string,
@@ -50,104 +69,147 @@ function applyScanPolicy(
   if (policy === "redact") {
     return redacted;
   }
-  // "allow" — return as-is
   return value;
 }
 
+/**
+ * Template distill — offline fallback. Rewritten for v0.2.6 to avoid the
+ * v0.2.5 "session-id as skill name" + literal tool-call dump that made those
+ * skills unusable. In template mode we ALWAYS emit a stub that's honest about
+ * being a stub and tells the user to re-run with --llm for the real thing.
+ */
 function templateDistill(
   session: ParsedSession,
   secretPolicy: SecretPolicy = "abort",
   onSecretsDetected?: (matches: SecretMatch[]) => void
 ): string {
-  const projectName = session.project
+  const projectName = (session.project
     .split("/")
-    .pop()
-    ?.toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-") ?? "unnamed";
+    .pop() ?? "unnamed")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
   const shortId = session.sessionId.slice(0, 8);
-  const name = `${projectName}-${shortId}`;
+  const name = `${projectName}-${shortId}-stub`;
 
   const tools = session.summary.uniqueTools.join(", ");
-  const firstUserMsg = session.messages.find((m) => m.role === "user")?.content.slice(0, 200) ?? "N/A";
+  const firstUserMsg =
+    session.messages.find((m) => m.role === "user")?.content.slice(0, 200) ?? "N/A";
   const rawFiles = session.filesModified.join(", ") || "none tracked";
-  const rawProject = session.project;
 
-  // Build tool-call steps and capture raw strings we need to scan
-  const stepsRaw = session.messages
-    .filter((m) => m.role === "assistant" && m.toolCalls.length > 0)
-    .flatMap((m, i) =>
-      m.toolCalls.map(
-        (tc, j) =>
-          `${i + 1}.${j + 1}. Use \`${tc.name}\` on \`${JSON.stringify(tc.input).slice(0, 100)}\``
-      )
-    )
-    .join("\n");
-
-  // C4 — scan every user-controllable field before it hits disk
   const collected: SecretMatch[] = [];
-  const safeProject = applyScanPolicy(rawProject, "template:project", secretPolicy, collected);
-  const safeProjectName = applyScanPolicy(projectName, "template:project-name", secretPolicy, collected);
+  const safeProject = applyScanPolicy(session.project, "template:project", secretPolicy, collected);
   const safeFiles = applyScanPolicy(rawFiles, "template:files-modified", secretPolicy, collected);
   const safeFirstMsg = applyScanPolicy(firstUserMsg, "template:first-user-message", secretPolicy, collected);
-  const safeSteps = applyScanPolicy(stepsRaw, "template:steps", secretPolicy, collected);
   const safeTools = applyScanPolicy(tools, "template:tools", secretPolicy, collected);
-  const safeName = `${safeProjectName}-${shortId}`;
 
   if (collected.length > 0) {
     onSecretsDetected?.(collected);
   }
 
   return `---
-name: ${safeName}
-description: Pattern extracted from ${session.agent} session (${session.totalToolCalls} tool calls)
+name: ${name}
+description: Template stub — session captured offline, re-run with --llm for a real skill
 source_session: ${session.sessionId}
 source_agent: ${session.agent}
-created: ${new Date().toISOString().split("T")[0]}
+created: ${new Date().toISOString().slice(0, 10)}
+distill_prompt_version: ${DISTILL_PROMPT_VERSION}-template
+confidence: low
 tags:
   - auto-extracted
-  - ${session.agent}
+  - template-stub
 ---
 
-# ${safeName}
+# ${name}
 
 ## When to use
-When working on a similar task in \`${safeProject}\`. This pattern used ${safeTools}.
+Template stub — this file captures the shape of the session but has no distilled pattern.
+Re-run \`skillcam distill --llm <session-id>\` to generate an actionable skill.
 
 ## Steps
-${safeSteps || "No tool call steps extracted."}
+1. Re-run with \`--llm\` and a configured API key to distill a real pattern.
 
 ## Example
 Session started with: "${safeFirstMsg}"
 Modified files: ${safeFiles}
+Tools used: ${safeTools}
 Total tool calls: ${session.totalToolCalls}
 
 ## Key decisions
-- Tools used: ${safeTools}
-- Token cost: ${session.totalTokens.input + session.totalTokens.output} tokens
-- Duration: ${session.startedAt} to ${session.endedAt}
+- (none — template mode does not extract decisions)
+
+## Why this worked
+(not captured — template mode)
 `;
+}
+
+async function callDistillLlm(
+  prompt: string,
+  provider: "anthropic" | "openai",
+  model: string
+): Promise<string> {
+  if (provider === "anthropic") {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error(
+        "ANTHROPIC_API_KEY not set. Run: export ANTHROPIC_API_KEY=sk-ant-...\nOr use --no-llm for template-only mode."
+      );
+    }
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ timeout: LLM_TIMEOUT_MS });
+    const response = await client.messages.create({
+      model,
+      max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const textBlock = response.content.find((b) => b.type === "text");
+    return textBlock?.text ?? "";
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error(
+      "OPENAI_API_KEY not set. Run: export OPENAI_API_KEY=sk-...\nOr use --no-llm for template-only mode."
+    );
+  }
+  const { default: OpenAI } = await import("openai");
+  const client = new OpenAI({ timeout: LLM_TIMEOUT_MS });
+  const response = await client.chat.completions.create({
+    model,
+    max_tokens: 2000,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return response.choices[0]?.message?.content ?? "";
 }
 
 async function llmDistill(
   session: ParsedSession,
-  provider: "anthropic" | "openai",
-  model: string,
-  secretPolicy: SecretPolicy,
-  onSecretsDetected?: (matches: SecretMatch[]) => void
+  options: Required<Pick<DistillOptions, "provider" | "model" | "secretPolicy">> &
+    Pick<DistillOptions, "onSecretsDetected" | "onJudgment" | "judgeModel" | "forceDistill">
 ): Promise<string> {
-  // Sprint 2 / audit C2 B1: buildDistillPrompt now returns the per-field
-  // scan matches (collected BEFORE truncation) alongside the prompt. We still
-  // run a final scanAndRedact over the composed prompt as defense-in-depth
-  // for session metadata (project, filesModified, sessionId, tool names...)
-  // that does not flow through the per-field scanner.
+  const {
+    provider,
+    model,
+    secretPolicy,
+    onSecretsDetected,
+    onJudgment,
+    judgeModel,
+    forceDistill,
+  } = options;
+
+  // Step 1 — quality gate. Cheap Haiku call decides whether to spend Sonnet.
+  if (!forceDistill) {
+    const judgeOpts: JudgeOptions = { provider, model: judgeModel };
+    const judgment = await judgeSession(session, judgeOpts);
+    onJudgment?.(judgment);
+    if (!judgment.distillable) {
+      throw new NotDistillableError(judgment);
+    }
+  }
+
+  // Step 2 — build the distill prompt, scan for secrets.
   const {
     prompt: builtPrompt,
     matches: builtMatches,
     truncatedMessageCount,
   } = buildDistillPrompt(session);
   if (truncatedMessageCount > 0) {
-    // B1 — surface the cost-protection truncation so the user knows why some
-    // of their session didn't reach the LLM.
     console.warn(
       `⚠ Session has ${session.messages.length} messages, capping to the most recent ${session.messages.length - truncatedMessageCount} (B1 billing guard).`
     );
@@ -165,55 +227,48 @@ async function llmDistill(
       throw new SecretsDetectedError(matches);
     }
     if (secretPolicy === "redact") {
-      // outerRedacted contains both the per-field redactions (already baked
-      // into builtPrompt) plus any extra redactions from the outer pass.
       prompt = outerRedacted;
     }
-    // "allow" falls through and sends builtPrompt as-is
   }
 
+  // Step 3 — main distill call (Sonnet by default).
+  let rawLlmOutput: string;
   try {
-    if (provider === "anthropic") {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        throw new Error("ANTHROPIC_API_KEY not set. Run: export ANTHROPIC_API_KEY=sk-ant-...\nOr use --no-llm for template-only mode.");
-      }
-      const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      // M3 — explicit client-level timeout so a stalled provider does not hang the CLI
-      const client = new Anthropic({ timeout: LLM_TIMEOUT_MS });
-      const response = await client.messages.create({
-        model,
-        max_tokens: 2000,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock?.text ?? templateDistill(session, secretPolicy, onSecretsDetected);
-    }
-
-    if (provider === "openai") {
-      if (!process.env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY not set. Run: export OPENAI_API_KEY=sk-...\nOr use --no-llm for template-only mode.");
-      }
-      const { default: OpenAI } = await import("openai");
-      // M3 — same timeout for OpenAI client
-      const client = new OpenAI({ timeout: LLM_TIMEOUT_MS });
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: 2000,
-        messages: [{ role: "user", content: prompt }],
-      });
-      return response.choices[0]?.message?.content ?? templateDistill(session, secretPolicy, onSecretsDetected);
-    }
+    rawLlmOutput = await callDistillLlm(prompt, provider, model);
   } catch (err) {
-    if (err instanceof SecretsDetectedError) {
-      throw err;
-    }
+    if (err instanceof SecretsDetectedError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`\n✗ LLM distillation failed: ${msg}`);
     console.error("  Falling back to template mode.\n");
     return templateDistill(session, secretPolicy, onSecretsDetected);
   }
 
-  return templateDistill(session, secretPolicy, onSecretsDetected);
+  // Step 4 — parse strict JSON + render markdown in TS.
+  const projectName = (session.project.split("/").pop() ?? "skill")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  const fallbackName = `${projectName}-${session.sessionId.slice(0, 8)}`;
+
+  let result: DistillResult;
+  try {
+    result = parseDistillPayload(rawLlmOutput, fallbackName);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`\n✗ Distiller output did not match schema: ${msg}`);
+    console.error("  Falling back to template mode.\n");
+    return templateDistill(session, secretPolicy, onSecretsDetected);
+  }
+
+  if (result.kind === "abort") {
+    throw new DistillationAbortedError(result.payload.abort, result.payload.reason);
+  }
+
+  return renderSkillMarkdown(result.payload, {
+    sessionId: session.sessionId,
+    agent: session.agent,
+    createdISO: new Date().toISOString().slice(0, 10),
+    distillPromptVersion: DISTILL_PROMPT_VERSION,
+  });
 }
 
 export async function distillSkill(
@@ -224,13 +279,24 @@ export async function distillSkill(
     useLlm = true,
     provider = "anthropic",
     model = provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o",
+    judgeModel,
     secretPolicy = "abort",
     onSecretsDetected,
+    onJudgment,
+    forceDistill = false,
   } = options;
 
   if (!useLlm) {
     return templateDistill(session, secretPolicy, onSecretsDetected);
   }
 
-  return llmDistill(session, provider, model, secretPolicy, onSecretsDetected);
+  return llmDistill(session, {
+    provider,
+    model,
+    judgeModel,
+    secretPolicy,
+    onSecretsDetected,
+    onJudgment,
+    forceDistill,
+  });
 }

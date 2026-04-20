@@ -4,3 +4,4 @@ dist/
 .env
 agents/
 *.d.ts.map
+eval/out/

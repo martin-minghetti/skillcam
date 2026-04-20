@@ -74,8 +74,13 @@ describe("templateDistill secret scanning (C4)", () => {
   });
 
   it("redacts instead of aborting under 'redact' policy", async () => {
+    // v0.2.6 — template output is now a minimalist stub; `project` is no
+    // longer embedded in it. Route the secret through `filesModified` which
+    // the stub still surfaces, to keep the invariant under test: with
+    // redact policy the output must not contain the raw secret but must
+    // show the redaction marker.
     const session = makeSession({
-      project: `/Users/test/${anthropicKey}/stuff`,
+      filesModified: [`/Users/test/${anthropicKey}/.env`],
     });
     const skill = await distillSkill(session, {
       useLlm: false,
