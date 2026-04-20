@@ -14,7 +14,13 @@ import { createRequire } from "node:module";
 import { discoverSessions } from "./discovery.js";
 import { parseClaudeCodeSession } from "./parsers/claude-code.js";
 import { parseCodexSession } from "./parsers/codex.js";
-import { distillSkill, SecretsDetectedError, type SecretPolicy } from "./distiller.js";
+import {
+  distillSkill,
+  SecretsDetectedError,
+  NotDistillableError,
+  DistillationAbortedError,
+  type SecretPolicy,
+} from "./distiller.js";
 import { summarize } from "./secret-scan.js";
 import { emitEvent } from "./events/emit.js";
 import type { ParsedSession } from "./parsers/types.js";
@@ -200,6 +206,8 @@ program
   .option("--redact", "Redact detected secrets before sending to the LLM")
   .option("--allow-secrets", "Send session as-is even if secrets are detected (not recommended)")
   .option("--force", "Overwrite output file if it already exists (default: refuse)")
+  .option("--force-distill", "Skip the quality judge and distill even exploratory sessions")
+  .option("--judge-model <model>", "Model for the quality judge (defaults to Haiku)")
   .action(async (sessionId, opts) => {
     const sessions = discoverSessions({
       agent: opts.agent,
@@ -242,6 +250,8 @@ program
         useLlm,
         provider: opts.provider,
         model: opts.model,
+        judgeModel: opts.judgeModel,
+        forceDistill: Boolean(opts.forceDistill),
         secretPolicy,
         onSecretsDetected: (matches) => {
           if (secretPolicy === "redact") {
@@ -252,11 +262,25 @@ program
             console.warn(summarize(matches));
           }
         },
+        onJudgment: (j) => {
+          const badge = j.distillable ? "✓" : "✗";
+          console.log(
+            `${badge} Quality judge (${j.confidence}): ${sanitizeForTerminal(j.reason)}`
+          );
+        },
       });
     } catch (err) {
       if (err instanceof SecretsDetectedError) {
         console.error(`\n✗ ${err.message}\n`);
         process.exit(2);
+      }
+      if (err instanceof NotDistillableError) {
+        console.error(`\n✗ ${err.message}\n`);
+        process.exit(7);
+      }
+      if (err instanceof DistillationAbortedError) {
+        console.error(`\n✗ ${err.message}\n`);
+        process.exit(8);
       }
       throw err;
     }
