@@ -5,8 +5,7 @@
 <h1 align="center">SkillCam</h1>
 
 <p align="center">
-  Turn successful AI agent runs into reusable markdown skills.<br>
-  Stop solving the same problem twice.
+  Turn successful AI agent runs into reusable markdown skills.
 </p>
 
 <p align="center">
@@ -18,47 +17,33 @@
 
 ---
 
-## The Problem
+```bash
+$ skillcam distill --latest
+✓ Read session a1b2c3d4... (claude-code)
+✓ Found 12 messages, 47 tool calls
+✓ Quality judge (high): produced concrete artifact, pattern is reusable
+✓ Distilling with anthropic...
+✓ Wrote skill to ./skills/fix-broken-imports-after-rename-refactor.md
+```
 
-Your AI coding agents solve problems every day. They read files, run tools, iterate on solutions, and eventually get it right. Then they forget everything.
+Same task next week, with vs. without the skill the agent now has on disk:
 
-Next time the same problem shows up, the agent starts from scratch. Same research, same trial and error, same token burn. You're paying for the same work twice.
+|              | Without SkillCam       | With SkillCam              |
+|--------------|------------------------|----------------------------|
+| Time         | ~15 min                | ~3 min                     |
+| Input tokens | ~50k                   | ~8k                        |
+| What happens | Agent figures it out from scratch | Agent reads the skill, runs the steps |
 
-## The Solution
+Numbers above are illustrative on a typical "fix the auth tests"-style task. Your mileage varies by session length and model.
 
-SkillCam reads native session logs from Claude Code and Codex CLI, extracts the successful pattern, and writes it as a clean `SKILL.md` file. Next time the agent sees the same kind of task, it reads the skill and follows the steps instead of figuring it out again.
+## Why
 
-One command. No config. Works with any LLM or without one.
+Your AI coding agent solves something today. Tomorrow the same problem comes back and the agent starts from zero — same files read, same tools tried, same tokens spent. The session log already on disk in `~/.claude/projects/` or `~/.codex/sessions/` has the answer. SkillCam pulls it out into a `SKILL.md` your agent reads next time.
+
+One command. No daemon. No config. Works without an LLM (template stub) or with one (real distill).
 
 ```bash
 npx skillcam distill --latest
-```
-
-## Before and After
-
-```
-Before SkillCam:
-
-  You: "Fix the auth tests"
-  Agent: *figures it out from scratch* (15 min, 50k tokens)
-
-  Next week:
-  You: "Fix the auth tests again"
-  Agent: *figures it out from scratch again* (15 min, 50k tokens)
-```
-
-```
-After SkillCam:
-
-  You: "Fix the auth tests"
-  Agent: *figures it out* (15 min, 50k tokens)
-
-  $ skillcam distill --latest
-  > Wrote skill to ./skills/fix-auth-tests.md
-
-  Next week:
-  You: "Fix the auth tests again"
-  Agent: *reads the skill, follows the steps* (3 min, 8k tokens)
 ```
 
 ## How It Works
@@ -102,18 +87,13 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 
 ## Security
 
-Agent sessions often carry secrets (API keys, tokens, private file contents) and can themselves be hostile if anything else writes to `~/.claude/projects` or `~/.codex/sessions`. SkillCam treats every session as untrusted input.
+Agent sessions can carry secrets (API keys, tokens, file contents) and can be hostile if anything else writes to `~/.claude/projects` or `~/.codex/sessions`. SkillCam treats every session as untrusted input.
 
-What runs on every distill:
-
-- **Secret scanner** — 14 patterns (Anthropic / OpenAI / GitHub / AWS / Stripe / Slack / JWT / PEM / generic), normalized against 7 bypass classes (NFKC, zero-width, URL-encode, Unicode escape, homoglyphs, combining marks, recursive base64 to depth 3). Aborts by default; `--redact` to continue, `--allow-secrets` to override, `--no-llm` to stay fully local.
-- **SKILL.md output sanitizer** — strips Unicode directional overrides, HTML comments, nested code fences, and unknown frontmatter keys before the file hits disk. Stops one agent's session from carrying a prompt-injection payload to the next agent that reads the skill.
-- **Filesystem hardening** — trust-root confinement, symlink rejection on read, atomic writes with `O_EXCL`, path-traversal guards on the LLM-controlled filename.
-- **Cost & DoS guards** — 50 MB session size cap, 1 MB per-line cap, 1000-message prompt cap (bounds worst-case cost at ~$0.75/distill), 100 KB skill output cap, LLM call timeout.
-- **Terminal injection guards** — control chars stripped from session-derived output in `preview` and `distill`.
+- **In-prompt** — secret scanner (14 patterns, normalized against NFKC / zero-width / URL-encode / Unicode escape / homoglyphs / combining marks / recursive base64), output sanitizer that strips prompt-injection payloads from `SKILL.md` before write, terminal-injection guards on every session-derived field including error paths.
+- **On disk** — trust-root confinement on read, symlink rejection, atomic writes with `O_EXCL`, path-traversal guards on the LLM-controlled filename, 50 MB session cap + 100 KB skill cap.
 - **Supply chain** — published from CI via npm Trusted Publishing (OIDC) with Sigstore provenance, no long-lived tokens.
 
-Two deep audits are public in the project notes. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
+Three adversarial audits are recorded in the project notes; the latest (v0.3.1) closed four findings in the v0.3.0 distiller rewrite. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
 
 ## Installation
 
@@ -164,7 +144,7 @@ skillcam distill --latest --allow-secrets              # Send as-is even if secr
 skillcam distill --latest --no-llm                     # Template stub only (no API key, no real distill)
 ```
 
-**Exit codes** (v0.3.0)
+**Exit codes** (v0.3.1)
 
 | Code | Meaning |
 |------|---------|
@@ -303,7 +283,7 @@ The code is grouped by role. Each layer has one job.
 |  | `src/events/types.ts` | `AgentEvent` schema |
 | **Update check** | `src/update-check.ts` | Once-per-day npm registry check, atomic + sandboxed |
 | **Examples** | `examples/skills/` | Real skills generated from sessions |
-| **Tests** | `tests/` | Vitest suite (122 tests across 14 files) |
+| **Tests** | `tests/` | Vitest suite (169 tests across 17 files) |
 
 ## Contributing
 
