@@ -329,12 +329,19 @@ program
       if (newDescription && Number.isFinite(threshold)) {
         const similar = findSimilarSkills(newDescription, opts.output, threshold);
         if (similar.length > 0) {
+          // Audit #4 I1 — both `opts.output` (user-supplied, may have been
+          // pasted with control chars) and `s.path` (derived from
+          // readdirSync, so the filename comes straight from the
+          // filesystem and may contain ANSI/control bytes if anything
+          // wrote a hostile name into --output) must be sanitized.
+          // Regression direct from R1 (audit #3): every console.error of
+          // an attacker-controllable string goes through sanitizeForTerminal.
           console.error(
-            `\n✗ Found ${similar.length} similar skill(s) already in ${opts.output}:`
+            `\n✗ Found ${similar.length} similar skill(s) already in ${sanitizeForTerminal(opts.output)}:`
           );
           for (const s of similar.slice(0, 3)) {
             console.error(
-              `  - ${s.path} (${(s.similarity * 100).toFixed(1)}% match)`
+              `  - ${sanitizeForTerminal(s.path)} (${(s.similarity * 100).toFixed(1)}% match)`
             );
           }
           console.error(
