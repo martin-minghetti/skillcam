@@ -115,6 +115,34 @@ describe("parseDistillPayload", () => {
     expect(() => parseDistillPayload(raw, "fallback")).toThrow();
   });
 
+  it("handles adversarial dash-heavy input in linear time (ReDoS guard)", () => {
+    // Regression for CodeQL js/polynomial-redos on the kebab validator.
+    // A 10k-char dash-padded payload must complete in under 100ms on any
+    // sane machine. The pre-fix regex took seconds to reject this.
+    const hostile = "a" + "-".repeat(10000) + "!b";
+    const raw = JSON.stringify({
+      name: hostile,
+      description: "d",
+      when_to_use: "w",
+      steps: ["s"],
+      example: "e",
+      key_decisions: [],
+      tags: ["testing"],
+      confidence: "low",
+      why_this_worked: "w",
+    });
+    const start = Date.now();
+    const res = parseDistillPayload(raw, "fallback-safe");
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(100);
+    if (res.kind === "skill") {
+      expect(res.payload.name).toMatch(/^[a-z][a-z0-9-]*$/);
+      expect(res.payload.name.length).toBeLessThanOrEqual(64);
+    } else {
+      throw new Error("expected skill");
+    }
+  });
+
   it("sanitizes a bad kebab name to the fallback", () => {
     const raw = JSON.stringify({
       name: "Skill With CAPS & spaces!!",

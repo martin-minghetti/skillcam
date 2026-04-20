@@ -56,7 +56,12 @@ export type DistillResult =
   | { kind: "skill"; payload: SkillPayload }
   | { kind: "abort"; payload: AbortPayload };
 
-const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+// Linear-time kebab validator. The naive /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+// is polynomial-time under backtracking when fed strings like "a-----..."
+// (CodeQL js/polynomial-redos). This formulation consumes one char per
+// step with an alternation (either a kebab char, or a dash immediately
+// followed by a kebab char), which has no ambiguous paths.
+const KEBAB = /^[a-z](?:[a-z0-9]|-[a-z0-9])*$/;
 
 function normalizeTag(t: string): string {
   return t.trim().toLowerCase().replace(/[\s_]+/g, "-");
