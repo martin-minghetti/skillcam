@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import {
   jaroWinkler,
   findSimilarSkills,
+  parseDedupThreshold,
 } from "../src/dedup.js";
 
 describe("jaroWinkler — string similarity (audit-3 follow-up: dedup)", () => {
@@ -150,6 +151,53 @@ body
       0.8
     );
     expect(matches).toEqual([]);
+  });
+});
+
+// v0.4.3 I3 — `--dedup-threshold` previously used parseFloat, which silently
+// accepts garbage trailers ("0.8junk" → 0.8), out-of-range values (-1, 2),
+// and returns NaN for non-numeric input that the CLI then read as "skip
+// dedup" with no warning. Strict parse + range check, fail loud.
+describe("parseDedupThreshold — strict number-and-range validation (v0.4.3 I3)", () => {
+  it("accepts a clean float in [0, 1]", () => {
+    expect(parseDedupThreshold("0.85")).toBe(0.85);
+    expect(parseDedupThreshold("0")).toBe(0);
+    expect(parseDedupThreshold("1")).toBe(1);
+  });
+
+  it("rejects garbage strings", () => {
+    expect(() => parseDedupThreshold("abc")).toThrow(/threshold/i);
+  });
+
+  it("rejects partial-numeric trailers (no parseFloat-style 0.8junk → 0.8)", () => {
+    expect(() => parseDedupThreshold("0.8junk")).toThrow(/threshold/i);
+  });
+
+  it("rejects out-of-range values", () => {
+    expect(() => parseDedupThreshold("2")).toThrow(/range|0/i);
+    expect(() => parseDedupThreshold("-1")).toThrow(/range|0/i);
+    expect(() => parseDedupThreshold("1.0001")).toThrow(/range|0/i);
+  });
+
+  it("rejects NaN, Infinity and empty string", () => {
+    expect(() => parseDedupThreshold("NaN")).toThrow();
+    expect(() => parseDedupThreshold("Infinity")).toThrow();
+    expect(() => parseDedupThreshold("")).toThrow();
+  });
+
+  // Audit #5 C1 — the throw message must NOT reflect the raw input. cli.ts
+  // forwards Error.message to console.error; if a malicious flag value
+  // (ANSI escape, control bytes, embedded secret) appears in the message
+  // verbatim, we get terminal injection / secret echo.
+  it("does not echo control bytes from the input back into the error message", () => {
+    let caught: Error | null = null;
+    try {
+      parseDedupThreshold("\x1b[2Jpwn");
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught!.message).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
   });
 });
 

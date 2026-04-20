@@ -11,6 +11,41 @@ const MAX_DESCRIPTION_LEN = 512;                // chars compared in jaroWinkler
 const MAX_FILES_SCANNED = 1000;                 // entries processed per call
 
 /**
+ * v0.4.3 I3 — strict parser for the `--dedup-threshold` CLI flag.
+ *
+ * Previously cli.ts used `parseFloat(input)` which silently accepts:
+ *   - "0.8junk" → 0.8 (trailing garbage swallowed)
+ *   - "abc"     → NaN (treated by the CLI as "skip dedup", no warning)
+ *   - "2"       → 2   (out of range, no match possible)
+ *   - "-1"      → -1  (out of range, every skill matches)
+ *
+ * Now: `Number(input)` (rejects partial trailers), explicit NaN/Infinity
+ * check, hard `[0, 1]` range. Throws with a descriptive message so the
+ * CLI can surface it instead of skipping the check silently.
+ */
+export function parseDedupThreshold(input: string): number {
+  if (input.length === 0) {
+    throw new Error("dedup-threshold: empty value (expected a number in [0, 1])");
+  }
+  // Audit #5 C1 — never reflect the raw input into the Error.message.
+  // The CLI forwards Error.message to console.error; a hostile value with
+  // ANSI escapes or control bytes would otherwise execute as terminal
+  // commands when printed. Generic message instead.
+  const n = Number(input);
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      "dedup-threshold: not a finite number (expected a number in [0, 1])"
+    );
+  }
+  if (n < 0 || n > 1) {
+    throw new Error(
+      `dedup-threshold: ${n} is out of range (expected a number in [0, 1])`
+    );
+  }
+  return n;
+}
+
+/**
  * v0.4.1 — Pre-write dedup against an output directory of existing skills.
  *
  * The judge tells us a session is "distillable", but two productive
