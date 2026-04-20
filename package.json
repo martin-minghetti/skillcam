@@ -18,7 +18,8 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "demo": "tsx scripts/demo.ts",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx eval/run.ts",
+    "eval:judge": "tsx eval/run.ts --judge-only"
   },
   "keywords": [
     "ai",

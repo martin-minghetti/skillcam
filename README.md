@@ -80,10 +80,26 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 
 - **Discover** — scans `~/.claude/projects/` and `~/.codex/sessions/` for `.jsonl` files. Each agent format has its own parser. Sessions are sorted by most recent first.
 - **Parse** — reads the raw JSONL into a typed shape: user/assistant messages, tool calls with inputs/outputs, files modified, token usage, project metadata.
-- **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Kills the #1 cause of low-quality skills — sessions that never should have been distilled.
+- **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Forces the model to invoke a typed tool (`report_judgment`) so the verdict can't be smuggled through raw text. The verdict is then cross-checked against deterministic local signals (`filesModified`, `totalToolCalls`); a `distillable: true` verdict on a session with zero artifacts is overridden to abort.
 - **Distill** — (LLM mode) Sonnet emits strict JSON; template mode writes a stub.
 - **Render** — JSON → SKILL.md in TypeScript. Schema-validated, frontmatter under our control, tags restricted to a closed taxonomy.
 - **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, judge verdict, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
+
+### How well does the judge filter?
+
+The judge is one cheap LLM call. To make its quality measurable instead of asserted, the repo ships an eval harness with hand-curated synthetic sessions and a runner that scores the judge against them.
+
+| | |
+|--|--|
+| Last run | `2026-04-20` (against `claude-haiku-4-5`) |
+| Fixtures | 5 (4 distillable, 1 not) |
+| Accuracy | 100% (5/5) |
+| Precision | 100% — when the judge says distillable, how often is it right |
+| Recall | 100% — of the distillable sessions, how many it catches |
+
+Reproduce: `ANTHROPIC_API_KEY=… npm run eval:judge` (cost ≈ $0.001). Full report at `eval/out/judge-results.md` after the run.
+
+**Caveat** — five fixtures is enough to catch obvious regressions, not enough to claim the judge generalizes. If you have an agent session where the judge made the wrong call (either direction), please open an issue with the redacted JSONL — every real-world example sharpens the eval set.
 
 ## Security
 
