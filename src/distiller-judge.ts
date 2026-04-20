@@ -10,6 +10,47 @@ import {
 
 export type SecretPolicy = "abort" | "redact" | "allow";
 
+// Audit #3 J2 — strict tool schema for the judge response. Forcing the
+// model to call this tool (instead of emitting JSON in a text block)
+// closes every attack that relied on injecting literal output bytes:
+// malformed JSON, text-only replies, control-char smuggling, etc. It does
+// NOT prevent a jailbroken model from choosing the wrong distillable
+// value — that is defense-in-depth work for a future revision.
+const JUDGE_TOOL_NAME = "report_judgment";
+const JUDGE_TOOL_DESCRIPTION =
+  "Report whether the agent session contains a reusable pattern worth turning into a skill.";
+const JUDGE_INPUT_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    distillable: { type: "boolean" as const },
+    reason: { type: "string" as const, maxLength: 200 },
+    confidence: {
+      type: "string" as const,
+      enum: ["high", "medium", "low"],
+    },
+  },
+  required: ["distillable", "reason", "confidence"],
+};
+
+function coerceJudgeInput(input: unknown): JudgeResult {
+  if (!input || typeof input !== "object") {
+    return {
+      distillable: false,
+      reason: "judge tool returned non-object input",
+      confidence: "low",
+    };
+  }
+  const obj = input as Record<string, unknown>;
+  const distillable = obj.distillable === true;
+  const reason = typeof obj.reason === "string" ? obj.reason : "no reason given";
+  const rawConfidence = typeof obj.confidence === "string" ? obj.confidence : "low";
+  const confidence: JudgeResult["confidence"] =
+    rawConfidence === "high" || rawConfidence === "medium" || rawConfidence === "low"
+      ? rawConfidence
+      : "low";
+  return { distillable, reason, confidence, raw: JSON.stringify(obj) };
+}
+
 /**
  * v0.2.6 — Two-step architecture.
  *
@@ -186,11 +227,32 @@ export async function judgeSession(
       const response = await client.messages.create({
         model: model ?? JUDGE_MODEL_DEFAULT,
         max_tokens: 300,
+        // Audit #3 J2 — force the model to call our typed tool instead of
+        // emitting JSON in a text block. The SDK gives us back the input
+        // already parsed.
+        tools: [
+          {
+            name: JUDGE_TOOL_NAME,
+            description: JUDGE_TOOL_DESCRIPTION,
+            input_schema: JUDGE_INPUT_SCHEMA,
+          },
+        ],
+        tool_choice: { type: "tool", name: JUDGE_TOOL_NAME },
         messages: [{ role: "user", content: prompt }],
       });
-      const textBlock = response.content.find((b) => b.type === "text");
-      const text = textBlock?.text ?? "";
-      return coerceResult(text);
+      const toolUseBlock = response.content.find(
+        (b: { type: string; name?: string }) =>
+          b.type === "tool_use" && b.name === JUDGE_TOOL_NAME
+      ) as { input?: unknown } | undefined;
+      if (toolUseBlock) {
+        return coerceJudgeInput(toolUseBlock.input);
+      }
+      // Defense in depth — model ignored the tool and replied with text.
+      // Try the legacy string-aware parser as a fallback rather than fail.
+      const textBlock = response.content.find(
+        (b: { type: string }) => b.type === "text"
+      ) as { text?: string } | undefined;
+      return coerceResult(textBlock?.text ?? "");
     }
 
     if (provider === "openai") {
@@ -206,8 +268,40 @@ export async function judgeSession(
       const response = await client.chat.completions.create({
         model: model ?? "gpt-4o-mini",
         max_tokens: 300,
+        // Audit #3 J2 — equivalent function-calling enforcement on OpenAI.
+        tools: [
+          {
+            type: "function" as const,
+            function: {
+              name: JUDGE_TOOL_NAME,
+              description: JUDGE_TOOL_DESCRIPTION,
+              parameters: JUDGE_INPUT_SCHEMA,
+            },
+          },
+        ],
+        tool_choice: {
+          type: "function" as const,
+          function: { name: JUDGE_TOOL_NAME },
+        },
         messages: [{ role: "user", content: prompt }],
       });
+      const toolCall = response.choices[0]?.message?.tool_calls?.[0];
+      // OpenAI SDK 6+ unions ChatCompletionMessageToolCall with a custom-tool
+      // variant; only the function-tool variant has `.function`. Narrow it.
+      if (toolCall && "function" in toolCall && toolCall.function?.name === JUDGE_TOOL_NAME) {
+        try {
+          const parsed = JSON.parse(toolCall.function.arguments);
+          return coerceJudgeInput(parsed);
+        } catch {
+          return {
+            distillable: false,
+            reason: "judge tool arguments not valid JSON",
+            confidence: "low",
+          };
+        }
+      }
+      // Defense in depth — fall back to text content if the model ignored
+      // the function. Same rationale as the Anthropic path above.
       const text = response.choices[0]?.message?.content ?? "";
       return coerceResult(text);
     }
