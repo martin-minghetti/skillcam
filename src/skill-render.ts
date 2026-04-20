@@ -183,7 +183,19 @@ export function parseDistillPayload(
       typeof obj.why_this_worked === "string" ? obj.why_this_worked.trim() : "",
   };
 
-  if (!payload.description || !payload.when_to_use || payload.steps.length === 0) {
+  // Audit #5 N1 — validate description AFTER normalize, not before. A
+  // string of pure C0/C1 controls passes .trim() (it's not whitespace),
+  // satisfies the "required field" check, and then collapses to "" when
+  // renderSkillMarkdown calls normalizeFrontmatterValue. Result was a
+  // skill written with `description: ` blank, dedup downstream skipping
+  // it, contract silently broken. Run normalize here too and reject if
+  // the post-normalize value is empty.
+  const normalizedDescription = normalizeFrontmatterValue(payload.description);
+  if (
+    !normalizedDescription ||
+    !payload.when_to_use ||
+    payload.steps.length === 0
+  ) {
     throw new Error(
       "Distiller output missing required fields: description / when_to_use / steps"
     );
@@ -242,6 +254,22 @@ export interface RenderContext {
   distillPromptVersion?: string;
 }
 
+/**
+ * v0.4.3 I2 — normalize a frontmatter value to a single, terminal-safe line.
+ *
+ * The dedup extractor (and any tool that reads the frontmatter line by
+ * line) can only see the first physical line of a value. The renderer is
+ * the right place to enforce single-line: strip C0/C1 control bytes (no
+ * ANSI, no NUL), collapse newlines + whitespace runs to a single space.
+ * Closes the multiline-bypass family of dedup misses.
+ */
+function normalizeFrontmatterValue(s: string): string {
+  return s
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")  // C0/C1 controls (incl. \n, \r, \t, ESC)
+    .replace(/\s+/g, " ")                    // collapse whitespace runs
+    .trim();
+}
+
 export function renderSkillMarkdown(
   payload: SkillPayload,
   ctx: RenderContext
@@ -256,7 +284,7 @@ export function renderSkillMarkdown(
 
   return `---
 name: ${payload.name}
-description: ${payload.description}
+description: ${normalizeFrontmatterValue(payload.description)}
 source_session: ${ctx.sessionId}
 source_agent: ${ctx.agent}
 created: ${ctx.createdISO}
