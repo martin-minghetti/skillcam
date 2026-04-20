@@ -1,6 +1,6 @@
 {
   "name": "skillcam",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Turn successful AI agent runs into reusable markdown skills",
   "type": "module",
   "bin": {
@@ -30,6 +30,9 @@
     "cli"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/martin-minghetti/skillcam.git"

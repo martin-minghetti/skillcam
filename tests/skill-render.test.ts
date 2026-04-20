@@ -6,6 +6,135 @@ import {
   ALLOWED_TAGS,
 } from "../src/skill-render.js";
 
+// v0.4.3 I2 — description must be normalized to a single line. The dedup
+// extractor reads only the first physical line of `description:` in the
+// frontmatter, and the YAML format itself is ambiguous if a value
+// contains a raw newline without a block-scalar marker. The renderer is
+// the right place to enforce this — no `description:` value with embedded
+// newlines should ever hit disk.
+describe("renderSkillMarkdown — single-line description (v0.4.3 I2)", () => {
+  function basePayload() {
+    return {
+      name: "x",
+      description: "PLACEHOLDER",
+      when_to_use: "when",
+      steps: ["s1"],
+      example: "ex",
+      key_decisions: ["d1"],
+      tags: ["testing"],
+      confidence: "high" as const,
+      why_this_worked: "why",
+    };
+  }
+  const ctx = {
+    sessionId: "sess",
+    agent: "claude-code",
+    createdISO: "2026-04-20",
+  };
+
+  it("collapses embedded \\n in description to a single space", () => {
+    const md = renderSkillMarkdown(
+      { ...basePayload(), description: "first line\nsecond line" },
+      ctx
+    );
+    const descLine = md.split("\n").find((l) => l.startsWith("description:"));
+    expect(descLine).toBe("description: first line second line");
+  });
+
+  it("collapses \\r\\n and \\r the same way", () => {
+    const md = renderSkillMarkdown(
+      { ...basePayload(), description: "first\r\nsecond\rthird" },
+      ctx
+    );
+    const descLine = md.split("\n").find((l) => l.startsWith("description:"));
+    expect(descLine).toBe("description: first second third");
+  });
+
+  it("strips ANSI escape bytes — the [31m literal that follows is plain ASCII and stays", () => {
+    const md = renderSkillMarkdown(
+      { ...basePayload(), description: "ok\x1b[31mevil\x1b[0m" },
+      ctx
+    );
+    const descLine = md.split("\n").find((l) => l.startsWith("description:"));
+    // The crucial guarantee: no \x1b byte survives. The bracketed remainder
+    // is plain ASCII and renders as visible text in any terminal.
+    expect(descLine).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+    expect(descLine).toContain("evil");
+  });
+
+  it("collapses runs of whitespace to a single space", () => {
+    const md = renderSkillMarkdown(
+      { ...basePayload(), description: "lots   of    spaces\n   and\ttabs" },
+      ctx
+    );
+    const descLine = md.split("\n").find((l) => l.startsWith("description:"));
+    expect(descLine).toBe("description: lots of spaces and tabs");
+  });
+
+  it("leaves single-line descriptions untouched (no spurious changes)", () => {
+    const md = renderSkillMarkdown(
+      { ...basePayload(), description: "Fix failing tests after a rename" },
+      ctx
+    );
+    const descLine = md.split("\n").find((l) => l.startsWith("description:"));
+    expect(descLine).toBe("description: Fix failing tests after a rename");
+  });
+});
+
+// Audit #5 N1 — parseDistillPayload validated description with .trim() only,
+// pre-normalize. A control-byte-only string survives trim (e.g. "\u001b   "
+// trims to "\u001b", non-empty), passes the "required field" check, and
+// then renderSkillMarkdown normalizes it to "". Result: description: blank
+// on disk, dedup downstream skips this skill, schema contract broken.
+// Validation must run AFTER normalize.
+describe("parseDistillPayload — description must be non-empty post-normalize (audit #5 N1)", () => {
+  it("rejects a description that's all control bytes (would normalize to empty)", () => {
+    const raw = JSON.stringify({
+      name: "x",
+      description: "\u001b   \u0007",
+      when_to_use: "when",
+      steps: ["s"],
+      example: "ex",
+      key_decisions: ["d"],
+      tags: ["testing"],
+      confidence: "high",
+      why_this_worked: "why",
+    });
+    expect(() => parseDistillPayload(raw, "fb")).toThrow(/description/i);
+  });
+
+  it("rejects a description that's all whitespace + controls", () => {
+    const raw = JSON.stringify({
+      name: "x",
+      description: "\n\t\r  \u0080",
+      when_to_use: "when",
+      steps: ["s"],
+      example: "ex",
+      key_decisions: ["d"],
+      tags: ["testing"],
+      confidence: "high",
+      why_this_worked: "why",
+    });
+    expect(() => parseDistillPayload(raw, "fb")).toThrow(/description/i);
+  });
+
+  it("accepts a description with a control byte in the middle (normalizes to a real string)", () => {
+    const raw = JSON.stringify({
+      name: "x",
+      description: "Real text\u0007with embedded bell",
+      when_to_use: "when",
+      steps: ["s"],
+      example: "ex",
+      key_decisions: ["d"],
+      tags: ["testing"],
+      confidence: "high",
+      why_this_worked: "why",
+    });
+    // Should NOT throw — there's real content after normalize.
+    expect(() => parseDistillPayload(raw, "fb")).not.toThrow();
+  });
+});
+
 describe("parseDistillPayload", () => {
   it("parses a valid skill JSON payload", () => {
     const raw = JSON.stringify({

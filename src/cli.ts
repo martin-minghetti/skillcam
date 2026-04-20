@@ -36,7 +36,7 @@ import {
   truncateSkill,
 } from "./limits.js";
 import { scheduleUpdateCheck } from "./update-check.js";
-import { findSimilarSkills } from "./dedup.js";
+import { findSimilarSkills, parseDedupThreshold } from "./dedup.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
@@ -325,8 +325,17 @@ program
     if (dedupEnabled) {
       const descMatch = skill.match(/^description:\s*(.+)$/m);
       const newDescription = descMatch?.[1]?.trim() ?? "";
-      const threshold = parseFloat(opts.dedupThreshold);
-      if (newDescription && Number.isFinite(threshold)) {
+      // v0.4.3 I3 — strict parse + range validation. Fails loud rather
+      // than skipping the check silently when user passes garbage.
+      let threshold: number;
+      try {
+        threshold = parseDedupThreshold(opts.dedupThreshold);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`✗ ${msg}`);
+        process.exit(2);
+      }
+      if (newDescription) {
         const similar = findSimilarSkills(newDescription, opts.output, threshold);
         if (similar.length > 0) {
           // Audit #4 I1 — both `opts.output` (user-supplied, may have been

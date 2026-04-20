@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.3 — 2026-04-20
+
+> **Honesty release.** Closes the third external critique of the day, which targeted **positioning**, not code: "sobreempaquetada en confianza respecto a la evidencia que muestra". This release tightens what we ship, documents what we hide, and fixes two more security findings caught by the v0.4.3 audit (audit #5) — including one direct regression of the R1/I1 terminal-injection pattern (third reopening of that family in 24 hours; the discipline rule earned its keep again).
+
+### Security fixes (audit #5)
+
+- **C1 (medium)** — `parseDedupThreshold` reflected the raw `--dedup-threshold` input into `Error.message`; the CLI then forwarded that to `console.error` without `sanitizeForTerminal`. A hostile flag value (`--dedup-threshold $'\x1b[2Jpwn'`) rendered as terminal commands or echoed an embedded secret to stderr. Fix: never reflect the raw input. Generic message text on parse failure; only the parsed numeric value (already a `number`, not a string) is printed back when reporting out-of-range.
+- **N1 (medium)** — `parseDistillPayload` validated the `description` field with `.trim()` only, **before** normalize. A string of pure C0/C1 controls (`"\u001b   "`) survived `.trim()` (it's not whitespace), satisfied the "required field" check, and then collapsed to `""` when `renderSkillMarkdown` normalized it. Skills landed on disk with `description: ` blank, dedup downstream skipped them, schema contract silently broken. Fix: run normalize inside the parser, reject if the post-normalize value is empty.
+
+### Honesty + transparency
+
+- **README "Side effects on disk"** — new section enumerating every file SkillCam writes (skill, `events.jsonl`, `~/.skillcam/update-check.json`) and reads (session JSONLs, `--output` for dedup), with how to opt out of each. The previous README sold "no daemon, no config" while quietly emitting events and pinging the npm registry.
+- **`SKILLCAM_NO_EVENTS=1`** — opt out of the per-distill JSONL append to `./agents/_core/events.jsonl`. Strict `1`-only opt-out (matches the existing `SKILLCAM_SKIP_UPDATE_CHECK` convention). The previous "future ecosystem hook" framing in the Emit pipeline doc was overclaim — today it's just a structured log on disk.
+- **README pipeline doc** — explicit that LLM mode performs **two** provider round-trips (judge + distill), not one. Also notes the new exit-code-2 cause: invalid `--dedup-threshold`.
+- **Security section reworded** — honest about the retroactive nature of audit #4 and that most validation so far has happened in this repo, not in real adversarial use. Kept the threat-model details, dropped the implicit "battle-tested" framing.
+- **Judge-eval caveat reworded** — "honest about what it measured and dishonest about what it implies." Five hand-curated synthetic fixtures is regression coverage, not statistical generalization.
+
+### Other
+
+- **`engines.node = ">=20.0.0"`** in `package.json`. Uses `fetch`, `AbortSignal.timeout`, top-level `await`, Commander 14 — all of which need Node 20+. Previously implicit, now declared.
+- **I2 dedup multiline bypass** — fixed at the renderer instead of the reader. `renderSkillMarkdown` now normalizes the `description` frontmatter value: strips C0/C1 controls, collapses whitespace runs, trims. Closes the case where a multiline description would defeat the dedup extractor.
+- **I3 strict `--dedup-threshold` validation** — `Number()` instead of `parseFloat` (rejects `"0.8junk"`), explicit isFinite + hard `[0, 1]` range. Throws on garbage instead of silently skipping the dedup check.
+
+### Tests
+
+- 18 new tests (3 strict-validation + 1 ANSI-safety + 5 normalize-behavior + 3 N1 reject/accept + 4 events opt-out + 2 misc).
+- Full suite: 215 / 215 passing (was 197).
+
+### Known issues (not blockers, deferred to a future release)
+
+- **V1** — `parseDedupThreshold` accepts numerically-equivalent forms `Number()` understands: `"0x1"` → 1, `"1e0"` → 1, `" 0.8 "` → 0.8, `"+0.8"` → 0.8, `"-0"` → -0. None are out-of-range or exploitable, but a stricter decimal grammar would match the documented contract more literally.
+- **N2** — `normalizeFrontmatterValue` strips C0/C1 controls but leaves Unicode bidi/isolate format characters (RLO U+202E, isolates U+2066–U+2069). The downstream `sanitizeSkillOutput` (audit #2 PI1) covers this for the on-disk output; closing it inside the normalizer too would be defense in depth.
+- Step-level dedup (only description today) — shipping waits for user signal asking for it.
+
 ## 0.4.2 — 2026-04-20
 
 > **Security release.** Closes the three blocker findings of [security audit #4](https://github.com/martin-minghetti/skillcam/blob/main/SECURITY.md), which audited the v0.4.0 + v0.4.1 surface (judge × local-signals cross-check + pre-write dedup) — the audit that should have happened *before* shipping those releases. No public API changes; drop-in upgrade.
