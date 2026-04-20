@@ -1,0 +1,170 @@
+import { readdirSync, readFileSync, statSync } from "fs";
+import { join } from "path";
+
+/**
+ * v0.4.1 — Pre-write dedup against an output directory of existing skills.
+ *
+ * The judge tells us a session is "distillable", but two productive
+ * sessions on the same problem will produce two near-identical skills.
+ * Without a check, the user's `./skills/` slowly fills with overlapping
+ * patterns under different names. This module computes Jaro-Winkler
+ * similarity between the new skill's `description` and every existing
+ * skill's `description` in the output directory, and surfaces matches
+ * above a threshold so the CLI can decide what to do.
+ *
+ * Why Jaro-Winkler and not Levenshtein:
+ *   - Better behavior on short strings (skill descriptions are 1-2 lines).
+ *   - Boosts matches that share a common prefix, which is exactly the
+ *     shape near-duplicates take ("Fix failing tests by ..." vs "Fix
+ *     failing tests because ...").
+ *   - O(n*m), no external dependency.
+ */
+
+/**
+ * Jaro distance — counts character matches within a sliding window plus
+ * transpositions. Returns a value in [0, 1].
+ */
+function jaro(a: string, b: string): number {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+
+  const matchDistance = Math.max(0, Math.floor(Math.max(a.length, b.length) / 2) - 1);
+  const aMatched = new Array<boolean>(a.length).fill(false);
+  const bMatched = new Array<boolean>(b.length).fill(false);
+  let matches = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    const lo = Math.max(0, i - matchDistance);
+    const hi = Math.min(b.length - 1, i + matchDistance);
+    for (let j = lo; j <= hi; j++) {
+      if (bMatched[j]) continue;
+      if (a[i] !== b[j]) continue;
+      aMatched[i] = true;
+      bMatched[j] = true;
+      matches++;
+      break;
+    }
+  }
+
+  if (matches === 0) return 0;
+
+  let k = 0;
+  let transpositions = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!aMatched[i]) continue;
+    while (!bMatched[k]) k++;
+    if (a[i] !== b[k]) transpositions++;
+    k++;
+  }
+
+  const t = transpositions / 2;
+  return (matches / a.length + matches / b.length + (matches - t) / matches) / 3;
+}
+
+/**
+ * Jaro-Winkler — Jaro plus a prefix bonus (max 4 chars, scale 0.1).
+ * Case-insensitive: both inputs are lowercased before comparison.
+ */
+export function jaroWinkler(a: string, b: string): number {
+  if (!a.length || !b.length) return 0;
+  const aLow = a.toLowerCase();
+  const bLow = b.toLowerCase();
+  const j = jaro(aLow, bLow);
+  if (j < 0.7) return j;
+
+  let prefix = 0;
+  const max = Math.min(4, aLow.length, bLow.length);
+  for (let i = 0; i < max; i++) {
+    if (aLow[i] !== bLow[i]) break;
+    prefix++;
+  }
+  return j + 0.1 * prefix * (1 - j);
+}
+
+export interface SimilarSkill {
+  path: string;
+  description: string;
+  similarity: number;
+}
+
+/**
+ * Extract `description` from a SKILL.md frontmatter block. Returns null if
+ * the file has no frontmatter or no description field. Forgiving: any
+ * leading/trailing whitespace, quoted values, etc.
+ */
+function extractDescription(text: string): string | null {
+  // Frontmatter lives between two --- lines at the very start of the file.
+  if (!text.startsWith("---")) return null;
+  const end = text.indexOf("\n---", 3);
+  if (end === -1) return null;
+  const block = text.slice(3, end);
+  // Match `description: <value>` line. Value may be quoted; we trim quotes
+  // at the boundaries only.
+  for (const line of block.split("\n")) {
+    const m = line.match(/^description:\s*(.+?)\s*$/);
+    if (!m || !m[1]) continue;
+    let v = m[1];
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    }
+    return v.length > 0 ? v : null;
+  }
+  return null;
+}
+
+/**
+ * Scan `outputDir` (flat, non-recursive) for `.md` files, compare each
+ * one's frontmatter `description` to `newDescription` via Jaro-Winkler,
+ * and return matches at or above `threshold`, sorted by similarity desc.
+ *
+ * Tolerant of:
+ *  - Missing directory (returns []).
+ *  - Files without frontmatter or without a description field (skipped).
+ *  - Empty descriptions (skipped).
+ *
+ * Does NOT recurse into subdirectories — keeps the check fast and the
+ * mental model simple.
+ */
+export function findSimilarSkills(
+  newDescription: string,
+  outputDir: string,
+  threshold = 0.8
+): SimilarSkill[] {
+  if (!newDescription) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(outputDir);
+  } catch {
+    return [];
+  }
+
+  const matches: SimilarSkill[] = [];
+  for (const name of entries) {
+    if (!name.endsWith(".md")) continue;
+    const full = join(outputDir, name);
+    let s;
+    try {
+      s = statSync(full);
+    } catch {
+      continue;
+    }
+    if (!s.isFile()) continue;
+
+    let text: string;
+    try {
+      text = readFileSync(full, "utf-8");
+    } catch {
+      continue;
+    }
+    const desc = extractDescription(text);
+    if (!desc) continue;
+
+    const sim = jaroWinkler(newDescription, desc);
+    if (sim >= threshold) {
+      matches.push({ path: full, description: desc, similarity: sim });
+    }
+  }
+
+  matches.sort((a, b) => b.similarity - a.similarity);
+  return matches;
+}

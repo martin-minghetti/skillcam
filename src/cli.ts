@@ -36,6 +36,7 @@ import {
   truncateSkill,
 } from "./limits.js";
 import { scheduleUpdateCheck } from "./update-check.js";
+import { findSimilarSkills } from "./dedup.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
@@ -208,6 +209,8 @@ program
   .option("--force", "Overwrite output file if it already exists (default: refuse)")
   .option("--force-distill", "Skip the quality judge and distill even exploratory sessions")
   .option("--judge-model <model>", "Model for the quality judge (defaults to Haiku)")
+  .option("--no-dedup", "Skip the pre-write similarity check against existing skills in --output")
+  .option("--dedup-threshold <n>", "Similarity threshold for the dedup check (0..1, default 0.80)", "0.80")
   .action(async (sessionId, opts) => {
     const sessions = discoverSessions({
       agent: opts.agent,
@@ -310,6 +313,37 @@ program
     const rawName = nameMatch?.[1]?.trim() ?? target.sessionId.slice(0, 8);
     const skillName = sanitizeSkillName(rawName, target.sessionId.slice(0, 8));
     const fileName = `${skillName}.md`;
+
+    // v0.4.1 dedup — before we write, check whether the description
+    // already exists in --output. Same-name overwrites are governed by
+    // --force; this check catches DIFFERENT-name duplicates, which is the
+    // common shape of "two productive sessions on the same problem
+    // produced two near-identical skills". Default threshold 0.80 on
+    // Jaro-Winkler similarity. Bypass with --no-dedup; tighten with
+    // --dedup-threshold 0.85.
+    const dedupEnabled = opts.dedup !== false;
+    if (dedupEnabled) {
+      const descMatch = skill.match(/^description:\s*(.+)$/m);
+      const newDescription = descMatch?.[1]?.trim() ?? "";
+      const threshold = parseFloat(opts.dedupThreshold);
+      if (newDescription && Number.isFinite(threshold)) {
+        const similar = findSimilarSkills(newDescription, opts.output, threshold);
+        if (similar.length > 0) {
+          console.error(
+            `\n✗ Found ${similar.length} similar skill(s) already in ${opts.output}:`
+          );
+          for (const s of similar.slice(0, 3)) {
+            console.error(
+              `  - ${s.path} (${(s.similarity * 100).toFixed(1)}% match)`
+            );
+          }
+          console.error(
+            `  Re-run with --no-dedup to write anyway, or pick a different --output.`
+          );
+          process.exit(9);
+        }
+      }
+    }
 
     mkdirSync(opts.output, { recursive: true });
 

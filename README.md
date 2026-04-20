@@ -83,6 +83,7 @@ One session becomes one skill. One skill turns the next run from a fresh discove
 - **Judge** — (LLM mode only) Haiku call on session metadata decides `distillable: yes/no`. Forces the model to invoke a typed tool (`report_judgment`) so the verdict can't be smuggled through raw text. The verdict is then cross-checked against deterministic local signals (`filesModified`, `totalToolCalls`); a `distillable: true` verdict on a session with zero artifacts is overridden to abort.
 - **Distill** — (LLM mode) Sonnet emits strict JSON; template mode writes a stub.
 - **Render** — JSON → SKILL.md in TypeScript. Schema-validated, frontmatter under our control, tags restricted to a closed taxonomy.
+- **Dedup** — before write, the new skill's `description` is compared (Jaro-Winkler) against every existing skill in `--output`. If any match exceeds the threshold (default `0.80`), exit `9` and surface the matches. Bypass with `--no-dedup`; tune with `--dedup-threshold 0.85`. Catches the common shape where two productive sessions on the same problem produce two near-identical skills under different names.
 - **Emit** — appends a structured event to `agents/_core/events.jsonl` with session metadata, skill path, token costs, judge verdict, and distill mode. This is the shared event contract that future agent-tooling in this ecosystem will read.
 
 ### How well does the judge filter?
@@ -160,9 +161,11 @@ skillcam distill --latest --force                      # Overwrite the output fi
 skillcam distill --latest --redact                     # Redact detected secrets before sending
 skillcam distill --latest --allow-secrets              # Send as-is even if secrets are detected
 skillcam distill --latest --no-llm                     # Template stub only (no API key, no real distill)
+skillcam distill --latest --no-dedup                   # Skip the similarity check against existing skills in --output
+skillcam distill --latest --dedup-threshold 0.85       # Tighten the dedup check (default 0.80)
 ```
 
-**Exit codes** (v0.3.1)
+**Exit codes** (v0.4.1)
 
 | Code | Meaning |
 |------|---------|
@@ -171,6 +174,7 @@ skillcam distill --latest --no-llm                     # Template stub only (no 
 | `2` | Secrets detected and policy is `abort` (use `--redact` or `--allow-secrets`) |
 | `7` | Quality judge refused — session not distillable (use `--force-distill` to override) |
 | `8` | LLM emitted an `abort` payload after the judge passed (session content broke the anti-literal rule) |
+| `9` | A similar skill already exists in `--output` (use `--no-dedup` to write anyway) |
 
 By default, `distill` scans the prompt for common secret patterns (API keys, tokens, private keys) and aborts if any are found. See [`SECURITY.md`](SECURITY.md).
 
