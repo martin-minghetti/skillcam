@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.1 — 2026-04-20
+
+> **Quality release.** Adds the third item from the post-v0.3.2 critique: a pre-write similarity check so two productive sessions on the same problem stop producing two near-identical skills under different names. No public API changes; drop-in upgrade.
+
+### New
+
+- **Pre-write dedup**. Before any write, the new skill's `description` is compared (Jaro-Winkler, case-insensitive, prefix-boosted) against every existing `.md` in `--output` (flat scan, no recurse). If any match is at or above the threshold (default `0.80`), `distill` exits `9` and prints up to three paths with their similarity %, suggesting `--no-dedup` or a different `--output`.
+- **Two new flags on `distill`**:
+  - `--no-dedup` — skip the check entirely
+  - `--dedup-threshold <n>` — override the default `0.80` (0..1)
+- **New exit code `9`** for the dedup hit.
+
+### Why Jaro-Winkler
+
+Better than Levenshtein for short strings (skill descriptions are 1-2 lines), boosts matches that share a common prefix (the typical near-duplicate shape: "Fix failing tests by ..." vs "Fix failing tests because ..."), and O(n*m) with no external dependency.
+
+### Tests
+
+- 10 new tests covering Jaro-Winkler properties (identity, empty input, typo-level edits, unrelated strings, symmetry) and `findSimilarSkills` edge cases (missing dir, no frontmatter, empty description, subdirectory isolation).
+- Full suite: 193 / 193 passing (was 183).
+
+### Known issues
+
+- The dedup check is description-only. Two skills with very different descriptions but near-identical `steps` will not collide. Step-level dedup is on the v0.5 list once we have user signal that description-level isn't enough.
+- Threshold tuning is heuristic. `0.80` was chosen from a handful of synthetic comparisons; expect to revise once we see real-world false positive / false negative ratios. Open an issue with the two descriptions if dedup misfires for you.
+
 ## 0.4.0 — 2026-04-20
 
 > **Quality release.** Closes the two largest "how do I trust this?" gaps that came up after v0.3.2: how good is the judge, and how do you know? No public API changes; drop-in upgrade.
