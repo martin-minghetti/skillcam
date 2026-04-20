@@ -240,12 +240,18 @@ function formatJudgeReport(results: JudgeRunResult[]): { markdown: string; metri
   lines.push(``);
   lines.push(`| Fixture | Expected | Judged | Confidence | Reason |`);
   lines.push(`|---------|----------|--------|------------|--------|`);
+  // Escape backslashes BEFORE pipes — otherwise an input containing `\|`
+  // would survive the pipe-replace as `\|` and break the table column
+  // (CodeQL js/incomplete-sanitization). Same idea as escaping HTML
+  // entities: do `&` first or you double-escape what you just emitted.
+  const mdCellEscape = (s: string): string =>
+    s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
   for (const r of results) {
     const exp = r.expectedDistillable ? "distillable" : "not";
     const got = r.actualDistillable ? "distillable" : "not";
     const mark = r.passes ? "✓" : "✗";
     lines.push(
-      `| ${r.name} | ${exp} | ${got} ${mark} | ${r.judgeConfidence} | ${r.judgeReason.slice(0, 80).replace(/\|/g, "\\|")} |`
+      `| ${r.name} | ${exp} | ${got} ${mark} | ${r.judgeConfidence} | ${mdCellEscape(r.judgeReason.slice(0, 80))} |`
     );
   }
 
