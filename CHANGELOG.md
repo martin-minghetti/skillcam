@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.2 — 2026-04-20
+
+> **Security release.** Closes the three blocker findings of [security audit #4](https://github.com/martin-minghetti/skillcam/blob/main/SECURITY.md), which audited the v0.4.0 + v0.4.1 surface (judge × local-signals cross-check + pre-write dedup) — the audit that should have happened *before* shipping those releases. No public API changes; drop-in upgrade.
+
+### Why this exists
+
+After v0.4.1 shipped, the operator pointed out that v0.4.0 and v0.4.1 had no audit of their own — only unit tests of helpers, no adversarial pass. The same pattern that the v0.3.0 rewrite hit before audit #3 (8 findings, 2 critical). We ran the audit retroactively. It found three blockers.
+
+### Security fixes
+
+- **I1 (medium, regression of R1)** — The v0.4.1 dedup error path printed both `opts.output` and each `s.path` from `findSimilarSkills` directly to `console.error`, without `sanitizeForTerminal`. Both surfaces are attacker-controllable: `opts.output` is a CLI flag value; `s.path` is the result of `join(outputDir, readdirSync entry)`, so a hostile filename in `--output` (e.g. `bad\x1b[2J\x1b[31mFAKE.md`) wrote ANSI escapes to the user's terminal — clearing the screen, spoofing colors, faking success lines. **This is the same vulnerability class R1 closed in v0.3.1.** Fix: wrap both prints with `sanitizeForTerminal`.
+- **D1 (medium)** — `findSimilarSkills` used `statSync` + `readFileSync`, which follow symlinks. A symlinked `.md` inside `--output` could read `/etc/passwd`, `/dev/zero`, or any path the process can stat. Same boundary-crossing class as audit #1 C6 in `cli.ts`. Fix: `lstatSync` + reject if `isSymbolicLink`.
+- **D2 (high)** — Three DoS vectors composing: (a) `readFileSync` had no size cap, so a 1 GB `.md` in `--output` OOMed the process before any compare ran; (b) `jaroWinkler` is O(n*m), so a frontmatter with a 30 KB description ran ~700ms per file (32k chars benchmarked at 731ms, scaling 4x per doubling); (c) the loop had no entry-count cap. Fix: three composing caps — `MAX_SKILL_FILE_SIZE = 64 KB`, `MAX_DESCRIPTION_LEN = 512 chars`, `MAX_FILES_SCANNED = 1000`. Generous for legit content, tight enough to bound worst-case work.
+
+### Tests
+
+- 4 new tests (symlink rejection + 3 DoS guard scenarios). Full suite: 197 / 197 passing (was 193).
+- E2E smoke for I1: `--output` containing a file with ANSI escapes in the name no longer emits raw `\x1b` bytes (verified via `grep -c $'\x1b'` on captured stderr).
+
+### Operator note
+
+This release validates the discipline saved as auto-memory the same day: **before any release to production touching a critical pipeline, run audit + integration tests + cross-check (Codex or equivalent) — even when the previous release was shipped fast and tests pass.** Audit #4 found three findings on code that had unit-tested helpers and zero CodeQL alerts, including one that was a direct regression of a finding closed three hours earlier.
+
+### Known issues (not blockers)
+
+- I2 — dedup is bypassable with multiline / YAML-block-scalar `description`. Both the writer and the reader extract only the first line.
+- I3 — `--dedup-threshold` accepts `abc` (skips silently), `0.8junk` (parses as 0.8), `2`, `-1`. No range validation.
+- E1 — `mdCellEscape` in `eval/run.ts` doesn't escape `\n`/`\r`, so a `judgeReason` with a newline can break a row in `judge-results.md`.
+
+All three deferred to v0.4.3.
+
 ## 0.4.1 — 2026-04-20
 
 > **Quality release.** Adds the third item from the post-v0.3.2 critique: a pre-write similarity check so two productive sessions on the same problem stop producing two near-identical skills under different names. No public API changes; drop-in upgrade.
