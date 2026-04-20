@@ -135,10 +135,12 @@ Distill a session into a reusable SKILL.md.
 ```bash
 skillcam distill --latest                              # Distill most recent session (LLM mode, default)
 skillcam distill <session-id>                          # Distill specific session
+skillcam distill --latest --agent codex                # Disambiguate when a prefix matches sessions across both agents
 skillcam distill --latest --provider openai --model gpt-4o  # Use GPT-4o for the main call
 skillcam distill --latest --judge-model claude-haiku-4-5-20251001   # Override judge model
 skillcam distill --latest --force-distill              # Skip the quality judge and distill anyway
 skillcam distill --latest --output ./my-skills/        # Custom output directory
+skillcam distill --latest --force                      # Overwrite the output file if it already exists (default: refuse)
 skillcam distill --latest --redact                     # Redact detected secrets before sending
 skillcam distill --latest --allow-secrets              # Send as-is even if secrets are detected
 skillcam distill --latest --no-llm                     # Template stub only (no API key, no real distill)
@@ -149,6 +151,7 @@ skillcam distill --latest --no-llm                     # Template stub only (no 
 | Code | Meaning |
 |------|---------|
 | `0` | Success — skill written to disk |
+| `1` | Session not found (run `skillcam list` to see available sessions) |
 | `2` | Secrets detected and policy is `abort` (use `--redact` or `--allow-secrets`) |
 | `7` | Quality judge refused — session not distillable (use `--force-distill` to override) |
 | `8` | LLM emitted an `abort` payload after the judge passed (session content broke the anti-literal rule) |
