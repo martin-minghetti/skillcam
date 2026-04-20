@@ -1,5 +1,14 @@
-import { readdirSync, readFileSync, statSync } from "fs";
+import { readdirSync, readFileSync, statSync, lstatSync } from "fs";
 import { join } from "path";
+
+// Audit #4 D2 — DoS guards. Without these, a single oversized .md or a
+// large dir of trivial .md files can hang the CLI. The thresholds are
+// generous for legit content (skill descriptions are <140 chars; flat
+// `./skills/` dirs in the wild have <100 entries) and tight enough that
+// O(n*m) work is bounded.
+const MAX_SKILL_FILE_SIZE = 64 * 1024;          // 64 KB per file
+const MAX_DESCRIPTION_LEN = 512;                // chars compared in jaroWinkler
+const MAX_FILES_SCANNED = 1000;                 // entries processed per call
 
 /**
  * v0.4.1 — Pre-write dedup against an output directory of existing skills.
@@ -138,17 +147,38 @@ export function findSimilarSkills(
     return [];
   }
 
+  // Audit #4 D2 — cap entries scanned. Bail early once we hit the limit.
+  const limited = entries.length > MAX_FILES_SCANNED
+    ? entries.slice(0, MAX_FILES_SCANNED)
+    : entries;
+  // Audit #4 D2 — cap the description we compare against so jaroWinkler
+  // (O(n*m)) stays bounded regardless of input size.
+  const newDescBounded =
+    newDescription.length > MAX_DESCRIPTION_LEN
+      ? newDescription.slice(0, MAX_DESCRIPTION_LEN)
+      : newDescription;
+
   const matches: SimilarSkill[] = [];
-  for (const name of entries) {
+  for (const name of limited) {
     if (!name.endsWith(".md")) continue;
     const full = join(outputDir, name);
-    let s;
+
+    // Audit #4 D1 — refuse to follow symlinks. lstat reports the symlink
+    // itself, not its target. Otherwise a symlinked .md inside outputDir
+    // could read /etc/passwd, /dev/zero, or any path the process can stat.
+    let ls;
     try {
-      s = statSync(full);
+      ls = lstatSync(full);
     } catch {
       continue;
     }
-    if (!s.isFile()) continue;
+    if (ls.isSymbolicLink()) continue;
+    if (!ls.isFile()) continue;
+
+    // Audit #4 D2 — size cap. statSync on a non-symlink is the file itself
+    // here (we already rejected symlinks above). 64 KB is generous for a
+    // legit SKILL.md and tight enough to prevent OOM on hostile content.
+    if (ls.size > MAX_SKILL_FILE_SIZE) continue;
 
     let text: string;
     try {
@@ -159,7 +189,10 @@ export function findSimilarSkills(
     const desc = extractDescription(text);
     if (!desc) continue;
 
-    const sim = jaroWinkler(newDescription, desc);
+    const descBounded = desc.length > MAX_DESCRIPTION_LEN
+      ? desc.slice(0, MAX_DESCRIPTION_LEN)
+      : desc;
+    const sim = jaroWinkler(newDescBounded, descBounded);
     if (sim >= threshold) {
       matches.push({ path: full, description: desc, similarity: sim });
     }
