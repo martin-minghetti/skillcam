@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.1 — 2026-04-20
+
+> **Security release.** Closes the four actionable findings from security audit #3 of the v0.3.0 distiller rewrite. No API changes; drop-in upgrade.
+
+### Security fixes
+
+- **S1 (critical)** — The judge prompt now passes through `scanAndRedact` before any network call and respects the user's `secretPolicy` (`abort` | `redact` | `allow`). In v0.3.0 the cheap-gate Haiku call exfiltrated raw user/assistant content to Anthropic regardless of policy, bypassing the secret-hygiene guarantee that the distiller call already enforced.
+- **J1 (critical)** — The judge JSON parser is now unified with `skill-render` (string-aware), uses a strict `obj.distillable === true` check, and fails CLOSED on parse error. In v0.3.0 a literal `}` inside the `reason` field broke parsing and triggered a fail-open default of `distillable: true`; additionally `Boolean(obj.distillable)` coerced `"false"`, `"0"`, `"no"` to `true`.
+- **R1 (high)** — `NotDistillableError` and `DistillationAbortedError` now sanitize the LLM-controlled `reason` inside their constructors (not just at the CLI print site). A jailbroken model could otherwise embed ANSI escapes that cleared the screen and spoofed a fake success line when the error was rendered.
+- **D1 (medium)** — `parseDistillPayload` now rejects unknown abort kinds with a strict allow-list (`no_artifact` | `no_reusable_pattern`) instead of silently coercing arbitrary strings to `no_reusable_pattern`. This was the load-bearing rung that let R1 fire from any payload.
+
+`SecretsDetectedError` was moved from `distiller.ts` to `secret-scan.ts` (re-exported from `distiller.ts` for backwards compatibility) so that `distiller-judge.ts` can throw it without an import cycle.
+
+### Tests
+
+- 15 new tests, written test-first against the four findings (5 for J1 including the type-coercion bypass, 4 for R1, 2 for S1, 1 for D1, plus 3 covering the second canonical abort kind and edge cases).
+- Full suite: 169 / 169 passing (was 154).
+
+### Known issues (not blockers, deferred to a future release)
+
+- `anonymizePath` does not anonymize relative paths (`../../foo/.env` passes through).
+- The judge prompt is bypassable via prompt injection in session content; the cost is bounded (one Sonnet call per bypassed gate).
+- `--force-distill` skips the judge but the distiller can still emit `{"abort": ...}`; the help text is misleading.
+- The demo shim does not unset its function or variables when sourced.
+
 ## 0.3.0 — 2026-04-19
 
 > **Release history note.** A fast-path release published as `skillcam@0.2.6` during the v0.3.0 preparation — the auto-release hook beat the package.json bump. Same code as v0.3.0. The `0.2.6` tag was not created; `v0.3.0` is the canonical release.
