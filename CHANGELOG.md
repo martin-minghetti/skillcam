@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.4.0 — 2026-04-20
+
+> **Quality release.** Closes the two largest "how do I trust this?" gaps that came up after v0.3.2: how good is the judge, and how do you know? No public API changes; drop-in upgrade.
+
+### Quality features
+
+- **Judge × local-signals cross-check.** The judge verdict is now post-processed against deterministic signals from the parsed session before being returned. Two rules:
+  - **Hard override** — if the judge says distillable but the session has zero `filesModified` AND zero `totalToolCalls`, the verdict flips to abort. Closes the residual of audit #3 J2 (a jailbroken model that lies about distillable still gets caught when the session has no artifact to back it up).
+  - **Soft flag** — if the judge says no but the session has both files modified AND >5 tool calls, keep the abort but tag the reason so the disagreement is visible. Judge stays the oracle of "no" — false negatives are recoverable via `--force-distill`, false positives waste Sonnet tokens.
+- **Publishable judge accuracy metrics.** New `npm run eval:judge` runs the cheap-gate Haiku call against the 5 hand-curated fixtures, compares with each fixture's expected outcome, and reports a confusion matrix + accuracy / precision / recall / F1 (total cost: ~$0.001). Output: `eval/out/judge-results.md` (paste-ready markdown) and `eval/out/judge-results.json` (machine-parseable). Exit `1` if accuracy < 100% so CI can gate on it.
+- **README "How well does the judge filter?" subsection** with last-run numbers (5/5, 100% accuracy on `claude-haiku-4-5`) and an explicit caveat that 5 fixtures is regression coverage, not statistical significance. Issue template invites users to grow the eval set with real sessions where the judge made the wrong call.
+
+### Tests
+
+- 6 new tests (5 cross-check rules + 1 OpenAI parse-from-tool_call sanity that was missing from v0.3.2 J2 coverage).
+- Full suite: 183 / 183 passing (was 177).
+
+### Internal
+
+- `judgeSession` is now a thin wrapper around the new private `runJudgeLlm` plus `applyLocalSignals`. Same external signature, easier to extend with more deterministic checks later.
+
 ## 0.3.2 — 2026-04-20
 
 > **Security release.** Closes the four findings audit #3 deferred from v0.3.1 (`A1`, `D2`, `D3`, `J2`). No public API changes; drop-in upgrade.
