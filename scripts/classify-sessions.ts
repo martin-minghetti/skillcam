@@ -70,7 +70,26 @@ function anonymize(p: string): string {
 }
 
 function intentClean(raw: string): string {
-  return raw.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  let out = raw;
+  const HTML_COMMENT_BLOCK_RE = /<!--[\s\S]*?--!?>/g;
+  while (true) {
+    const next = out.replace(HTML_COMMENT_BLOCK_RE, "");
+    if (next === out) break;
+    out = next;
+  }
+  const HTML_COMMENT_TOKEN_RE = /<!--|--!?>/g;
+  while (out.includes("<!--") || out.includes("-->") || out.includes("--!>")) {
+    const before = out;
+    out = out.replace(HTML_COMMENT_TOKEN_RE, "");
+    if (out === before) break;
+  }
+  const HTML_TAG_RE = /<[^>]*>/g;
+  while (out.includes("<")) {
+    const before = out;
+    out = out.replace(HTML_TAG_RE, "");
+    if (out === before) break;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 function classify(m: MinedJsonEntry): { label: Classified["label"]; reason: string } {
@@ -145,7 +164,7 @@ function main() {
     lines.push("|---|-------|--------|------:|------:|----:|----------:|---------|--------|");
     rows.forEach((c, i) => {
       const project = anonymize(c.session.project).split("/").slice(-2).join("/") || "?";
-      const intent = intentClean(c.firstUserMessage).slice(0, 70).replace(/\|/g, "\\|");
+      const intent = intentClean(c.firstUserMessage).slice(0, 70).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
       lines.push(
         `| ${i + 1} | ${c.label} | ${c.reason} | ${c.session.totalToolCalls} | ${c.session.filesModified.length} | ${c.durationSec}s | ${c.session.totalTokens.input} | ${project} | ${intent} |`
       );

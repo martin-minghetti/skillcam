@@ -220,7 +220,7 @@ async function main() {
     lines.push("|---|:----:|------:|------:|------:|--------:|-------:|---------|--------|-------|");
     sessions.forEach((m, i) => {
       const project = anonymizePath(m.parsed.project).split("/").slice(-2).join("/") || "?";
-      const intent = truncate(m.firstUserMessage, 80).replace(/\|/g, "\\|");
+      const intent = truncate(m.firstUserMessage, 80).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
       lines.push(
         `| ${i + 1} | ${m.tier} | ${m.score} | ${m.parsed.totalToolCalls} | ${m.parsed.filesModified.length} | ${m.durationSec} | ${m.parsed.totalTokens.input} | ${project} | ${intent} |  |`
       );
