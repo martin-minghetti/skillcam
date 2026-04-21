@@ -17,7 +17,22 @@
 
 ---
 
+## Two paths — pick yours
+
+**If you use Claude Code**, install SkillCam as a native skill — no API key needed:
+
 ```bash
+$ npm install -g skillcam
+$ skillcam init
+✓ Installed skillcam-distill skill to ~/.claude/skills/skillcam-distill/SKILL.md
+```
+
+Next Claude Code session, at the end of any productive work, say **"skillcam this session"**. Claude runs the distillation inline, using its own reasoning — no separate LLM call, no API key. The generated SKILL.md lands at `~/.claude/skills/<slug>/`, where Claude Code auto-discovers it on the next session.
+
+**If you use Codex CLI, batch processing, or CI** (or want the classic CLI flow), use `skillcam distill` with an API key:
+
+```bash
+$ export ANTHROPIC_API_KEY=sk-...
 $ skillcam distill --latest
 ✓ Read session a1b2c3d4... (claude-code)
 ✓ Found 12 messages, 47 tool calls
@@ -25,6 +40,8 @@ $ skillcam distill --latest
 ✓ Distilling with anthropic...
 ✓ Wrote skill to ./skills/fix-broken-imports-after-rename-refactor.md
 ```
+
+The rest of this README describes the CLI path in detail. The native Claude Code skill (`skillcam init`) follows the same pipeline conceptually but runs inside the agent session — see [`skills/skillcam-distill/SKILL.md`](skills/skillcam-distill/SKILL.md) for the full prompt contract, and [`examples/`](examples/) for sample outputs.
 
 Same task next week, with vs. without the skill the agent now has on disk:
 
@@ -49,7 +66,8 @@ npx skillcam distill --latest
 ## Requirements
 
 - Node.js `>= 20.0.0` (uses `fetch`, `AbortSignal.timeout`, top-level `await`).
-- Optional: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for LLM mode. `--no-llm` works offline.
+- **Claude Code path (`skillcam init`)**: no API key. Distillation runs inside your active Claude session.
+- **CLI path (`skillcam distill`)**: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for the real distill. `--no-llm` produces a template stub; in v0.5.0 the template mode is kept for offline inspection but the recommended offline path is now `skillcam init` on any Claude Code machine.
 
 ## How It Works
 

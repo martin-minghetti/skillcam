@@ -37,6 +37,7 @@ import {
 } from "./limits.js";
 import { scheduleUpdateCheck } from "./update-check.js";
 import { findSimilarSkills, parseDedupThreshold } from "./dedup.js";
+import { runInit } from "./cli-init.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
@@ -431,6 +432,56 @@ program
 
     console.log(`✓ Wrote skill to ${outPath}`);
     console.log(`\nYour agent can now reuse this skill in future sessions.`);
+  });
+
+program
+  .command("init")
+  .description(
+    "Install the SkillCam Claude Code skill to ~/.claude/skills/ (no API key needed)"
+  )
+  .option(
+    "--force",
+    "Overwrite existing installation"
+  )
+  .option(
+    "--target <dir>",
+    "Install to a custom directory (must be inside ~/.claude/skills/ unless --allow-any-target)"
+  )
+  .option(
+    "--allow-any-target",
+    "Allow --target paths outside ~/.claude/skills/ (not recommended)"
+  )
+  .action((opts: { force?: boolean; target?: string; allowAnyTarget?: boolean }) => {
+    let result;
+    try {
+      result = runInit({
+        force: opts.force,
+        target: opts.target,
+        allowAnyTarget: opts.allowAnyTarget,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`✗ ${sanitizeForTerminal(msg)}`);
+      process.exit(1);
+    }
+
+    if (result.kind === "installed") {
+      console.log(`✓ Installed skillcam-distill skill to ${result.targetPath}`);
+      console.log(
+        `\nNext: open a new Claude Code session and say "skillcam this session"\n` +
+        `at the end of any productive work. Claude will distill it inline —\n` +
+        `no API key needed.`
+      );
+      return;
+    }
+    if (result.kind === "skipped") {
+      console.log(`⊘ Skipped: ${result.targetPath} — ${result.reason}`);
+      process.exit(0);
+    }
+    if (result.kind === "error") {
+      console.error(`✗ ${sanitizeForTerminal(result.reason ?? "unknown error")}`);
+      process.exit(1);
+    }
   });
 
 program.parse();
