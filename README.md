@@ -60,6 +60,11 @@ Your AI coding agent solves something today. Tomorrow the same problem comes bac
 One command, no daemon. Works without an LLM (template stub) or with one (real distill). Has a small set of opt-in/opt-out env vars and writes one event line per successful distill — see [Side effects](#side-effects-on-disk) below.
 
 ```bash
+# Recommended (Claude Code, no API key needed):
+npm install -g skillcam && skillcam init
+# Then, at the end of any productive Claude Code session: "skillcam this session"
+
+# CLI alternative (Codex CLI, CI, batch):
 npx skillcam distill --latest
 ```
 
@@ -87,7 +92,22 @@ One session becomes one skill. One skill turns the next run from a fresh discove
   <img src="https://raw.githubusercontent.com/martin-minghetti/skillcam/main/docs/img/pipeline.svg" alt="Pipeline: discover → parse → distill (LLM or template) → emit → SKILL.md" width="600">
 </p>
 
-### Two-step quality pipeline (v0.3.0)
+### Native Claude Code skill — how it works
+
+`skillcam init` copies the distillation contract (`skills/skillcam-distill/SKILL.md`) into `~/.claude/skills/skillcam-distill/`. Claude Code auto-discovers skills in that directory on next session start — no MCP server, no daemon, no background process.
+
+At the end of any productive session, say **"skillcam this session"** (or any variant Claude's skill loader recognizes). From that point:
+
+- **No extra LLM round-trip.** The distillation runs inline, using the same Claude instance that did the work. No judge call, no separate Sonnet call — the agent already has full context from the session it just ran.
+- **No API key.** You're already authenticated inside Claude Code.
+- **Same output contract.** The generated `SKILL.md` follows the same frontmatter schema and strict rules (anonymized paths, no tool-call literals, closed-taxonomy tags) as the CLI path. Same renderer, same validation in TypeScript.
+- **Output location.** The skill lands at `~/.claude/skills/<slug>/SKILL.md`, where Claude Code auto-picks it up on the next session — closing the loop.
+
+Full prompt contract and rules: [`skills/skillcam-distill/SKILL.md`](skills/skillcam-distill/SKILL.md). Side-by-side sample outputs: [`examples/`](examples/).
+
+CLI path, the two-LLM-call pipeline, and all per-stage detail below.
+
+### CLI path — two-step quality pipeline (v0.3.0)
 
 1. **Quality judge** — a cheap Haiku call decides whether the session even contains a reusable pattern. Exploratory sessions, abandoned attempts, and tasks that produced no artifact short-circuit here with exit code `7`, before any Sonnet tokens are spent. Override with `--force-distill`.
 2. **Distill** — if the judge says yes, a Sonnet call emits a strict JSON payload (name, steps, decisions, `confidence`, `why_this_worked`, etc.). TypeScript validates the schema and renders the canonical `SKILL.md`. Frontmatter is never controlled by the LLM.
@@ -146,7 +166,7 @@ Agent sessions can carry secrets (API keys, tokens, file contents) and can be ho
 - **On disk** — trust-root confinement on read, symlink rejection, atomic writes with `O_EXCL`, path-traversal guards on the LLM-controlled filename, 50 MB session cap + 100 KB skill cap.
 - **Supply chain** — published from CI via npm Trusted Publishing (OIDC) with Sigstore provenance, no long-lived tokens.
 
-Four adversarial audits are recorded in the project notes (audits #1-#3 on the v0.2.x and v0.3.0 surfaces, audit #4 retroactive on v0.4.0/v0.4.1). Across the four audits, ~30 findings were filed and fixed; the most recent (v0.4.2) closed three blockers — including one that was a regression of an earlier fix — that shipped because v0.4.0 and v0.4.1 went out without an audit of their own. **Honest read**: the threat model is taken seriously and the audit cadence is real, but the project is recent and most of the security validation has happened in this repo, not in real adversarial use. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
+Five adversarial audits are recorded in the project notes (audits #1-#3 on the v0.2.x and v0.3.0 surfaces, audit #4 retroactive on v0.4.0/v0.4.1, audit #5 pre-release on v0.4.3). Across the five audits, ~32 findings were filed and fixed; the most recent (v0.4.3) closed two pre-release blockers (C1 terminal-injection in an error path, N1 bypass-class gap in the secret scanner) that would have shipped otherwise, plus three documentation honesty issues. **Honest read**: the threat model is taken seriously and the audit cadence is real, but the project is recent and most of the security validation has happened in this repo, not in real adversarial use. Threat model + reporting path in [`SECURITY.md`](SECURITY.md).
 
 ## Installation
 
@@ -201,7 +221,7 @@ skillcam distill --latest --no-dedup                   # Skip the similarity che
 skillcam distill --latest --dedup-threshold 0.85       # Tighten the dedup check (default 0.80)
 ```
 
-**Exit codes** (v0.4.3)
+**Exit codes**
 
 | Code | Meaning |
 |------|---------|
@@ -342,7 +362,7 @@ The code is grouped by role. Each layer has one job.
 |  | `src/events/types.ts` | `AgentEvent` schema |
 | **Update check** | `src/update-check.ts` | Once-per-day npm registry check, atomic + sandboxed |
 | **Examples** | `examples/skills/` | Real skills generated from sessions |
-| **Tests** | `tests/` | Vitest suite (169 tests across 17 files) |
+| **Tests** | `tests/` | Vitest suite (222 tests across 20 files) |
 
 ## Contributing
 
